@@ -4,35 +4,28 @@ import com.resqroute.exception.InvalidCostException;
 import com.resqroute.exception.NodeNotFoundException;
 import com.resqroute.graph.RoadGraph;
 import com.resqroute.model.Edge;
+import com.resqroute.model.EdgeKey;
 import com.resqroute.model.Node;
 import com.resqroute.model.RouteResult;
 
 import java.util.*;
 
 /**
- * High-performance Dijkstra's shortest-path algorithm optimized specifically for emergency response.
+ * High-performance Dijkstra's shortest-path algorithm tailored for emergency response optimization.
  *
- * <h3>Optimization Objective</h3>
- * <p>Standard geometric shortest-path algorithms minimize spatial distance in kilometres.
- * In emergency medical transport, this can be fatal because narrow, congested city alleys
- * often have short distances but prolonged transit times. This implementation minimizes
- * <b>total travel time in minutes</b> as its primary objective. If two competing routes offer
- * the exact same travel time, the algorithm applies a secondary tie-breaker minimizing
- * <b>total physical distance</b>.</p>
- *
- * <h3>Graph Representation</h3>
- * <p>The algorithm operates on an <b>adjacency-list</b> graph representation ({@link RoadGraph}).
- * For each vertex {@code u}, only its active outgoing directed edges are traversed.</p>
+ * <p>Unlike standard geometric shortest-path algorithms that optimize for spatial distance,
+ * this implementation strictly minimizes <b>total travel time in minutes</b>. This critical
+ * design choice ensures ambulances and emergency vehicles bypass slow, congested, or low-speed
+ * urban corridors even if the physical distance is slightly greater.</p>
  *
  * <h3>Algorithmic Complexity</h3>
  * <ul>
  *   <li><b>Time Complexity:</b> {@code O((|V| + |E|) * log(|V|))}, where {@code |V|} is the number of
- *       nodes (intersections/stations) and {@code |E|} is the number of directed road segments.
- *       Each node is settled at most once. Each edge is relaxed at most once. Priority queue operations
- *       (insert and extract-min) require {@code O(log |V|)} amortized time in the binary min-heap.
- *       Early termination halts search immediately when the destination node is settled.</li>
- *   <li><b>Space Complexity:</b> {@code O(|V|)} auxiliary space to maintain the min-priority queue,
- *       settled set, distance/time trackers, and predecessor pointers for route reconstruction.</li>
+ *       intersections (nodes) and {@code |E|} is the number of directed road segments (edges).
+ *       Extract-min and decrease-key (re-insertion) operations in the binary min-heap take {@code O(log |V|)}
+ *       amortized time. Early termination halts computation as soon as the target node is extracted from the heap.</li>
+ *   <li><b>Space Complexity:</b> {@code O(|V|)} auxiliary space to store best-known travel times,
+ *       predecessor pointers for route reconstruction, visited sets, and binary min-heap entries.</li>
  * </ul>
  */
 public class DijkstraRoutingAlgorithm implements RoutingAlgorithm {
@@ -40,8 +33,7 @@ public class DijkstraRoutingAlgorithm implements RoutingAlgorithm {
     private static final double EPSILON = 1e-9;
 
     /**
-     * Entry in the min-priority queue.
-     * Orders primarily by travel time (ascending), secondarily by distance (ascending).
+     * Internal entry representing a node in the min-priority queue ordered by travel time.
      */
     private record QueueEntry(String nodeId, double travelTimeMinutes, double distanceKm) implements Comparable<QueueEntry> {
         @Override
@@ -56,6 +48,25 @@ public class DijkstraRoutingAlgorithm implements RoutingAlgorithm {
 
     @Override
     public RouteResult findFastestRoute(RoadGraph graph, String sourceId, String destinationId) {
+        return findFastestRoute(graph, sourceId, destinationId, Collections.emptySet(), Collections.emptySet());
+    }
+
+    /**
+     * Calculates the fastest emergency route while ignoring temporarily excluded nodes and edges.
+     * Essential for Yen's K-shortest paths algorithm to explore branch deviations without mutating the graph.
+     *
+     * @param graph           Road network graph.
+     * @param sourceId        Origin waypoint identifier.
+     * @param destinationId   Destination waypoint identifier.
+     * @param excludedNodeIds Set of node IDs to avoid during traversal; may be empty or null.
+     * @param excludedEdges   Set of directed edge keys to avoid; may be empty or null.
+     * @return Reachable RouteResult, or unreachable if no valid path exists.
+     */
+    public RouteResult findFastestRoute(RoadGraph graph,
+                                        String sourceId,
+                                        String destinationId,
+                                        Set<String> excludedNodeIds,
+                                        Set<EdgeKey> excludedEdges) {
         Objects.requireNonNull(graph, "RoadGraph must not be null");
         validateNodeId(sourceId, "Source");
         validateNodeId(destinationId, "Destination");
@@ -63,7 +74,11 @@ public class DijkstraRoutingAlgorithm implements RoutingAlgorithm {
         String srcTrimmed = sourceId.trim();
         String dstTrimmed = destinationId.trim();
 
-        // Verify both source and destination exist in the graph
+        // If source or destination are explicitly excluded, path is unreachable
+        if (excludedNodeIds != null && (excludedNodeIds.contains(srcTrimmed) || excludedNodeIds.contains(dstTrimmed))) {
+            return RouteResult.unreachable(srcTrimmed, dstTrimmed);
+        }
+
         Node sourceNode = graph.getRequiredNode(srcTrimmed);
         Node destinationNode = graph.getRequiredNode(dstTrimmed);
 
@@ -72,7 +87,6 @@ public class DijkstraRoutingAlgorithm implements RoutingAlgorithm {
             return RouteResult.singleNode(sourceNode);
         }
 
-        // Dijkstra state tracking structures
         Map<String, Double> minTravelTime = new HashMap<>();
         Map<String, Double> distanceToNode = new HashMap<>();
         Map<String, Node> predecessorNode = new HashMap<>();
@@ -81,7 +95,6 @@ public class DijkstraRoutingAlgorithm implements RoutingAlgorithm {
 
         PriorityQueue<QueueEntry> pq = new PriorityQueue<>();
 
-        // Initialize origin
         minTravelTime.put(srcTrimmed, 0.0);
         distanceToNode.put(srcTrimmed, 0.0);
         pq.offer(new QueueEntry(srcTrimmed, 0.0, 0.0));
@@ -90,12 +103,10 @@ public class DijkstraRoutingAlgorithm implements RoutingAlgorithm {
             QueueEntry current = pq.poll();
             String u = current.nodeId();
 
-            // Discard stale entries from previous relaxations
             if (settled.contains(u)) {
                 continue;
             }
 
-            // If entry cost is strictly worse than best known travel time, skip it
             Double bestKnownTime = minTravelTime.get(u);
             if (bestKnownTime != null && current.travelTimeMinutes() > bestKnownTime + EPSILON) {
                 continue;
@@ -103,7 +114,6 @@ public class DijkstraRoutingAlgorithm implements RoutingAlgorithm {
 
             settled.add(u);
 
-            // Early exit: Target settled with globally optimal travel time
             if (u.equals(dstTrimmed)) {
                 break;
             }
@@ -117,6 +127,16 @@ public class DijkstraRoutingAlgorithm implements RoutingAlgorithm {
                 Node vNode = edge.getDestination();
                 String v = vNode.getId();
 
+                // Skip excluded nodes
+                if (excludedNodeIds != null && excludedNodeIds.contains(v)) {
+                    continue;
+                }
+
+                // Skip excluded directed edges
+                if (excludedEdges != null && excludedEdges.contains(new EdgeKey(u, v))) {
+                    continue;
+                }
+
                 if (settled.contains(v)) {
                     continue;
                 }
@@ -129,9 +149,7 @@ public class DijkstraRoutingAlgorithm implements RoutingAlgorithm {
                 double knownBestTime = minTravelTime.getOrDefault(v, Double.POSITIVE_INFINITY);
                 double knownBestDist = distanceToNode.getOrDefault(v, Double.POSITIVE_INFINITY);
 
-                // Primary criterion: strictly faster travel time
                 boolean isFaster = newTime < knownBestTime - EPSILON;
-                // Secondary criterion (tie-breaking): identical travel time, but shorter physical distance
                 boolean isTieBreakShorterDistance = Math.abs(newTime - knownBestTime) <= EPSILON && newDist < knownBestDist - EPSILON;
 
                 if (isFaster || isTieBreakShorterDistance) {
@@ -144,37 +162,8 @@ public class DijkstraRoutingAlgorithm implements RoutingAlgorithm {
             }
         }
 
-        // Unreachable destination (no path found or graph disconnected)
-        if (!predecessorNode.containsKey(dstTrimmed)) {
-            return RouteResult.unreachable(srcTrimmed, dstTrimmed);
-        }
-
-        // Efficient route reconstruction from destination back to source
-        LinkedList<Node> reconstructedPath = new LinkedList<>();
-        LinkedList<Edge> reconstructedEdges = new LinkedList<>();
-
-        Node curr = destinationNode;
-        while (curr != null && !curr.getId().equals(srcTrimmed)) {
-            reconstructedPath.addFirst(curr);
-            Edge edgeToCurr = predecessorEdge.get(curr.getId());
-            if (edgeToCurr != null) {
-                reconstructedEdges.addFirst(edgeToCurr);
-            }
-            curr = predecessorNode.get(curr.getId());
-        }
-
-        // Prepend source node
-        reconstructedPath.addFirst(sourceNode);
-
-        // Calculate exact accumulated totals
-        double totalDistance = 0.0;
-        double totalTime = 0.0;
-        for (Edge edge : reconstructedEdges) {
-            totalDistance += edge.getDistanceKm();
-            totalTime += edge.getTravelTimeMinutes();
-        }
-
-        return RouteResult.reachable(reconstructedPath, reconstructedEdges, totalDistance, totalTime);
+        // Delegate to shared, cycle-safe RouteReconstructor
+        return RouteReconstructor.reconstruct(sourceNode, destinationNode, predecessorNode, predecessorEdge);
     }
 
     private void validateNodeId(String id, String role) {

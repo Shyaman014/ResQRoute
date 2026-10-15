@@ -4,18 +4,22 @@ import com.resqroute.algorithm.AStarRoutingAlgorithm;
 import com.resqroute.algorithm.DijkstraRoutingAlgorithm;
 import com.resqroute.graph.RoadGraph;
 import com.resqroute.model.Node;
+import com.resqroute.model.RouteComparisonReport;
 import com.resqroute.model.RouteResult;
 import com.resqroute.service.RouteOptimizationService;
 
+import java.util.List;
+
 /**
- * Multi-Phase Demonstration of ResQRoute: Smart Emergency Ambulance Dispatch & Route Optimization.
+ * Phase 1 - 5 Demonstration of ResQRoute: Smart Emergency Ambulance Dispatch & Route Optimization.
  *
  * <p>Demonstrates:
  * 1. Road graph construction with strict duplicate protection and self-loop prevention.
  * 2. Fastest-route optimization vs. shortest-distance path (preserving the Golden Hour).
  * 3. Comparative evaluation: Dijkstra vs. A* search with admissible Haversine heuristic.
- * 4. Dynamic graph mutation: emergency road closure and automatic real-time detour rerouting.
- * 5. Boundary case validation: source equals destination and disconnected targets.</p>
+ * 4. Yen's K-Shortest Loopless Paths alternative route discovery.
+ * 5. Analytical route comparison matrix with unrounded metric calculations.
+ * 6. Dynamic graph mutation: emergency road closure and automatic real-time detour rerouting.</p>
  */
 public class ResQRouteDemo {
 
@@ -56,6 +60,9 @@ public class ResQRouteDemo {
         graph.addEdge("INT-C", "INT-D", 4.0, 3.2, "Outer Ring Expressway (Emergency Corridor)");
         graph.addEdge("INT-D", "HOSP-01", 1.8, 2.0, "Apex Elevated Access Ramp");
 
+        // Intermediate connector: INT-C -> INT-B (Connecting avenue)
+        graph.addEdge("INT-C", "INT-B", 2.5, 5.0, "Cross-City Boulevard");
+
         System.out.printf("  -> Graph populated: %d nodes, %d directed road segments.%n%n",
                 graph.getNodeCount(), graph.getEdgeCount());
 
@@ -77,11 +84,16 @@ public class ResQRouteDemo {
                 astarRoute.getTotalTravelTimeMinutes(), astarRoute.getTotalDistanceKm(),
                 (Math.abs(dijkstraRoute.getTotalTravelTimeMinutes() - astarRoute.getTotalTravelTimeMinutes()) < 1e-4));
 
-        // 4. Compare with Alternative Suboptimal Route
+        // 4. Yen's K-Shortest Loopless Paths & Route Comparison (Phase 5)
+        System.out.println("[Step 4] Computing Top K=3 Alternative Emergency Routes (Yen's Algorithm):");
+        RouteComparisonReport comparisonReport = dijkstraService.compareKFastestRoutes("AMB-01", "HOSP-01", 3);
+        System.out.println(comparisonReport.toFormattedTable());
+
+        // 5. Compare Fastest vs Shortest Distance
         printComparisonAnalysis(astarRoute);
 
-        // 5. Dynamic Incident & Detour Rerouting
-        System.out.println("[Step 4] Simulating Emergency Incident & Dynamic A* Detour:");
+        // 6. Dynamic Incident & Detour Rerouting
+        System.out.println("[Step 5] Simulating Emergency Incident & Dynamic Rerouting:");
         System.out.println("  >>> ALERT: Multi-vehicle collision blocks Outer Ring Expressway (INT-C -> INT-D).");
         boolean roadRemoved = graph.removeEdge("INT-C", "INT-D");
         System.out.printf("  >>> Segment INT-C -> INT-D closed safely? %s (Active edges: %d)%n",
@@ -91,8 +103,8 @@ public class ResQRouteDemo {
         System.out.println("\n  Recalculated Detour Route (A*):");
         System.out.println(detourRoute.toFormattedSummary());
 
-        // 6. Edge Case Demonstrations
-        System.out.println("[Step 5] Verifying Network Integrity and Boundary Cases:");
+        // 7. Edge Case Demonstrations
+        System.out.println("[Step 6] Verifying Network Integrity and Boundary Cases:");
 
         // Case A: Source == Destination
         System.out.println("  A. Source equals Destination (AMB-01 -> AMB-01):");
@@ -109,7 +121,7 @@ public class ResQRouteDemo {
 
         System.out.println();
         System.out.println("================================================================================");
-        System.out.println(" [SUCCESS] Phase 4 ResQRoute A* & Dijkstra Routing Engines fully verified.");
+        System.out.println(" [SUCCESS] Phase 5 ResQRoute Route Reconstruction & Alternatives verified.");
         System.out.println("================================================================================");
     }
 
@@ -117,7 +129,7 @@ public class ResQRouteDemo {
         System.out.println("""
                 ================================================================================
                   ResQRoute: Smart Emergency Ambulance Dispatch & Route Optimization System
-                  Phase 4: A* Search with Admissible Haversine Travel-Time Heuristic Engine
+                  Phase 5: Route Reconstruction, Yen's K-Shortest Paths & Route Comparison
                 ================================================================================
                 """);
     }

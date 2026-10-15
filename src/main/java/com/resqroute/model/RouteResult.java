@@ -87,6 +87,10 @@ public final class RouteResult {
         return edges;
     }
 
+    public List<String> getNodeIds() {
+        return path.stream().map(Node::getId).toList();
+    }
+
     public double getTotalDistanceKm() {
         return totalDistanceKm;
     }
@@ -133,11 +137,28 @@ public final class RouteResult {
     }
 
     @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (!(o instanceof RouteResult other)) return false;
+        return reachable == other.reachable
+                && Double.compare(other.totalDistanceKm, totalDistanceKm) == 0
+                && Double.compare(other.totalTravelTimeMinutes, totalTravelTimeMinutes) == 0
+                && Objects.equals(path, other.path)
+                && Objects.equals(sourceId, other.sourceId)
+                && Objects.equals(destinationId, other.destinationId);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(path, totalDistanceKm, totalTravelTimeMinutes, reachable, sourceId, destinationId);
+    }
+
+    @Override
     public String toString() {
         if (!reachable) {
             return String.format("RouteResult{unreachable from '%s' to '%s'}", sourceId, destinationId);
         }
         return String.format("RouteResult{path=%s, dist=%.2f km, time=%.2f min}",
-                path.stream().map(Node::getId).toList(), totalDistanceKm, totalTravelTimeMinutes);
+                getNodeIds(), totalDistanceKm, totalTravelTimeMinutes);
     }
 }

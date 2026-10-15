@@ -55,7 +55,6 @@ public class AStarRoutingAlgorithm implements RoutingAlgorithm {
             if (cmp != 0) {
                 return cmp;
             }
-            // Secondary tie-breaker: prefer higher gScore (closer to goal) or lower physical distance
             int gCmp = Double.compare(other.gScore, this.gScore);
             if (gCmp != 0) {
                 return gCmp;
@@ -112,10 +111,8 @@ public class AStarRoutingAlgorithm implements RoutingAlgorithm {
             return RouteResult.singleNode(sourceNode);
         }
 
-        // Determine active admissible heuristic
         TravelTimeHeuristic activeHeuristic = resolveHeuristic(graph);
 
-        // State tracking
         Map<String, Double> gScore = new HashMap<>();
         Map<String, Double> distanceToNode = new HashMap<>();
         Map<String, Node> predecessorNode = new HashMap<>();
@@ -124,7 +121,6 @@ public class AStarRoutingAlgorithm implements RoutingAlgorithm {
 
         PriorityQueue<AStarEntry> openSet = new PriorityQueue<>();
 
-        // Initialize start node
         gScore.put(srcTrimmed, 0.0);
         distanceToNode.put(srcTrimmed, 0.0);
         double initialH = computeHeuristic(activeHeuristic, sourceNode, destinationNode);
@@ -134,7 +130,6 @@ public class AStarRoutingAlgorithm implements RoutingAlgorithm {
             AStarEntry current = openSet.poll();
             String u = current.nodeId();
 
-            // Discard stale entries
             if (closedSet.contains(u)) {
                 continue;
             }
@@ -145,7 +140,6 @@ public class AStarRoutingAlgorithm implements RoutingAlgorithm {
 
             closedSet.add(u);
 
-            // Goal reached: optimal path guaranteed by admissible and consistent heuristic
             if (u.equals(dstTrimmed)) {
                 break;
             }
@@ -171,7 +165,6 @@ public class AStarRoutingAlgorithm implements RoutingAlgorithm {
                 double knownG = gScore.getOrDefault(v, Double.POSITIVE_INFINITY);
                 double knownDist = distanceToNode.getOrDefault(v, Double.POSITIVE_INFINITY);
 
-                // Primary criterion: faster path; Secondary: shorter distance on equal time
                 boolean isFaster = tentativeG < knownG - EPSILON;
                 boolean isTieBreak = Math.abs(tentativeG - knownG) <= EPSILON && tentativeDist < knownDist - EPSILON;
 
@@ -188,35 +181,8 @@ public class AStarRoutingAlgorithm implements RoutingAlgorithm {
             }
         }
 
-        // Unreachable destination handling
-        if (!predecessorNode.containsKey(dstTrimmed)) {
-            return RouteResult.unreachable(srcTrimmed, dstTrimmed);
-        }
-
-        // Reconstruct optimal route
-        LinkedList<Node> reconstructedPath = new LinkedList<>();
-        LinkedList<Edge> reconstructedEdges = new LinkedList<>();
-
-        Node curr = destinationNode;
-        while (curr != null && !curr.getId().equals(srcTrimmed)) {
-            reconstructedPath.addFirst(curr);
-            Edge edgeToCurr = predecessorEdge.get(curr.getId());
-            if (edgeToCurr != null) {
-                reconstructedEdges.addFirst(edgeToCurr);
-            }
-            curr = predecessorNode.get(curr.getId());
-        }
-        reconstructedPath.addFirst(sourceNode);
-
-        // Compute accumulated metrics from exact edge path
-        double totalDistance = 0.0;
-        double totalTime = 0.0;
-        for (Edge edge : reconstructedEdges) {
-            totalDistance += edge.getDistanceKm();
-            totalTime += edge.getTravelTimeMinutes();
-        }
-
-        return RouteResult.reachable(reconstructedPath, reconstructedEdges, totalDistance, totalTime);
+        // Delegate to shared, cycle-safe RouteReconstructor
+        return RouteReconstructor.reconstruct(sourceNode, destinationNode, predecessorNode, predecessorEdge);
     }
 
     private TravelTimeHeuristic resolveHeuristic(RoadGraph graph) {
@@ -224,7 +190,6 @@ public class AStarRoutingAlgorithm implements RoutingAlgorithm {
             return heuristicSupplier;
         }
 
-        // Dynamically deduce upper speed bound across graph edges to guarantee admissibility
         double maxSpeedFound = DEFAULT_SPEED_BOUND_KMH;
         for (Edge edge : graph.getAllEdges()) {
             double speed = edge.getAverageSpeedKmh();
@@ -246,7 +211,6 @@ public class AStarRoutingAlgorithm implements RoutingAlgorithm {
             }
             return val;
         } catch (Exception e) {
-            // Safety fallback: if coordinate math fails, zero-heuristic preserves Dijkstra correctness
             return 0.0;
         }
     }
