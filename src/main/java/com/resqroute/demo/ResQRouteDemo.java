@@ -3,15 +3,17 @@ package com.resqroute.demo;
 import com.resqroute.algorithm.AStarRoutingAlgorithm;
 import com.resqroute.algorithm.DijkstraRoutingAlgorithm;
 import com.resqroute.graph.RoadGraph;
-import com.resqroute.model.Node;
-import com.resqroute.model.RouteComparisonReport;
-import com.resqroute.model.RouteResult;
+import com.resqroute.model.*;
+import com.resqroute.service.AutomaticReroutingService;
+import com.resqroute.service.RoadIncidentService;
 import com.resqroute.service.RouteOptimizationService;
+import com.resqroute.service.TrafficSimulationEngine;
 
+import java.time.Instant;
 import java.util.List;
 
 /**
- * Phase 1 - 5 Demonstration of ResQRoute: Smart Emergency Ambulance Dispatch & Route Optimization.
+ * Phase 1 - 7 Demonstration of ResQRoute: Smart Emergency Ambulance Dispatch & Route Optimization.
  *
  * <p>Demonstrates:
  * 1. Road graph construction with strict duplicate protection and self-loop prevention.
@@ -19,7 +21,8 @@ import java.util.List;
  * 3. Comparative evaluation: Dijkstra vs. A* search with admissible Haversine heuristic.
  * 4. Yen's K-Shortest Loopless Paths alternative route discovery.
  * 5. Analytical route comparison matrix with unrounded metric calculations.
- * 6. Dynamic graph mutation: emergency road closure and automatic real-time detour rerouting.</p>
+ * 6. Dynamic traffic simulation: incident injection, real-time reroute evaluation, and restoration.
+ * 7. Road incident management, multiple incidents per road, automatic rerouting, and reopening.</p>
  */
 public class ResQRouteDemo {
 
@@ -50,9 +53,9 @@ public class ResQRouteDemo {
 
         // Path A: Shortest Distance Route (Congested City Core)
         // Total: 4.5 km, 21.0 minutes
-        graph.addEdge("AMB-01", "INT-A", 1.5, 6.0, "Market Approach Road (Congested)");
-        graph.addEdge("INT-A", "INT-B", 1.2, 8.0, "Bazaar Commercial Lane (Bottleneck)");
-        graph.addEdge("INT-B", "HOSP-01", 1.8, 7.0, "Hospital Backstreet (Narrow)");
+        graph.addEdge("AMB-01", "INT-A", 1.5, 6.0, "Market Approach Road");
+        graph.addEdge("INT-A", "INT-B", 1.2, 8.0, "Bazaar Commercial Lane");
+        graph.addEdge("INT-B", "HOSP-01", 1.8, 7.0, "Hospital Backstreet");
 
         // Path B: High-Speed Emergency Bypass Corridor (Longer distance, much faster)
         // Total: 8.0 km, 7.7 minutes
@@ -60,7 +63,7 @@ public class ResQRouteDemo {
         graph.addEdge("INT-C", "INT-D", 4.0, 3.2, "Outer Ring Expressway (Emergency Corridor)");
         graph.addEdge("INT-D", "HOSP-01", 1.8, 2.0, "Apex Elevated Access Ramp");
 
-        // Intermediate connector: INT-C -> INT-B (Connecting avenue)
+        // Cross connector: INT-C -> INT-B (Connecting boulevard: 2.5 km, 5.0 min)
         graph.addEdge("INT-C", "INT-B", 2.5, 5.0, "Cross-City Boulevard");
 
         System.out.printf("  -> Graph populated: %d nodes, %d directed road segments.%n%n",
@@ -68,6 +71,9 @@ public class ResQRouteDemo {
 
         RouteOptimizationService dijkstraService = new RouteOptimizationService(graph, new DijkstraRoutingAlgorithm());
         RouteOptimizationService astarService = new RouteOptimizationService(graph, new AStarRoutingAlgorithm());
+        TrafficSimulationEngine trafficEngine = new TrafficSimulationEngine(graph, 101L);
+        RoadIncidentService incidentService = dijkstraService.getIncidentService();
+        AutomaticReroutingService reroutingService = dijkstraService.getReroutingService();
 
         // 2. Compute Fastest Emergency Route with Dijkstra
         System.out.println("[Step 2] Calculating Optimal Route with Dijkstra: AMB-01 -> HOSP-01");
@@ -89,22 +95,72 @@ public class ResQRouteDemo {
         RouteComparisonReport comparisonReport = dijkstraService.compareKFastestRoutes("AMB-01", "HOSP-01", 3);
         System.out.println(comparisonReport.toFormattedTable());
 
-        // 5. Compare Fastest vs Shortest Distance
-        printComparisonAnalysis(astarRoute);
+        // 5. Dynamic Traffic Simulation & Reroute Evaluation (Phase 6)
+        System.out.println("[Step 5] Dynamic Traffic Simulation & Real-Time Congestion Assessment:");
+        System.out.println("  >>> CONGESTION INJECTION: Heavy traffic on Outer Ring Expressway (INT-C -> INT-D).");
+        trafficEngine.setTraffic("INT-C", "INT-D", TrafficLevel.HEAVY);
 
-        // 6. Dynamic Incident & Detour Rerouting
-        System.out.println("[Step 5] Simulating Emergency Incident & Dynamic Rerouting:");
-        System.out.println("  >>> ALERT: Multi-vehicle collision blocks Outer Ring Expressway (INT-C -> INT-D).");
-        boolean roadRemoved = graph.removeEdge("INT-C", "INT-D");
-        System.out.printf("  >>> Segment INT-C -> INT-D closed safely? %s (Active edges: %d)%n",
-                roadRemoved, graph.getEdgeCount());
+        Edge congestedEdge = graph.getEdge("INT-C", "INT-D").orElseThrow();
+        System.out.printf("  >>> Telemetry Update: %s travel time increased to %.1f min (Congestion: %s)%n",
+                congestedEdge.getRoadName(), congestedEdge.getTravelTimeMinutes(), congestedEdge.getTrafficCondition().level());
 
-        RouteResult detourRoute = astarService.findFastestRoute("AMB-01", "HOSP-01");
-        System.out.println("\n  Recalculated Detour Route (A*):");
-        System.out.println(detourRoute.toFormattedSummary());
+        // Restore road to normal
+        trafficEngine.restoreRoad("INT-C", "INT-D");
+        System.out.println("  >>> Traffic cleared: Restored to FREE_FLOW.\n");
+
+        // 6. Road Closures, Incident Management & Automatic Rerouting (Phase 7)
+        System.out.println("[Step 6] Phase 7: Road Incidents, Multiple Concurrent Hazards & Automatic Rerouting:");
+        Instant now = Instant.now();
+
+        // Ambulance starts mission on fastest highway route: AMB-01 -> INT-C -> INT-D -> HOSP-01
+        TrackedRoute trackedMission = reroutingService.trackRoute("MISSION-AMB-911", dijkstraRoute);
+        System.out.printf("  >>> Tracking Mission: %s [Route: %s, Travel Time: %.2f min]%n",
+                trackedMission.getTrackingId(), trackedMission.getActiveRoute().getNodeIds(),
+                trackedMission.getActiveRoute().getTotalTravelTimeMinutes());
+
+        // Incident 1: Major collision on Expressway
+        RoadIncident incident1 = RoadIncident.accident("INC-COLLISION-01", "INT-C", "INT-D", now);
+        incidentService.reportIncident(incident1);
+        System.out.printf("  >>> INCIDENT 1 REPORTED: %s on INT-C -> INT-D (Road status: %s)%n",
+                incident1.getDescription(), graph.isRoadClosed("INT-C", "INT-D") ? "CLOSED" : "OPEN");
+
+        // Incident 2: Emergency barrier repair on same segment
+        RoadIncident incident2 = RoadIncident.construction("INC-REPAIR-02", "INT-C", "INT-D", now, now.plusSeconds(7200));
+        incidentService.reportIncident(incident2);
+        System.out.printf("  >>> INCIDENT 2 REPORTED: %s on INT-C -> INT-D (Total active on road: %d)%n",
+                incident2.getDescription(), incidentService.getIncidentsOnRoad("INT-C", "INT-D").size());
+
+        // Automatic rerouting triggered
+        List<RerouteResponse> rerouteResponses = reroutingService.onRoadClosure("INT-C", "INT-D");
+        RerouteResponse reroute = rerouteResponses.get(0);
+        System.out.printf("  >>> REROUTE DECISION: %s%n", reroute.status());
+        System.out.printf("      Trigger Reason:   %s%n", reroute.triggerReason());
+        System.out.printf("      New Route Path:   %s (Time: %.2f min, Dist: %.2f km)%n",
+                reroute.newRoute().getNodeIds(), reroute.newRoute().getTotalTravelTimeMinutes(), reroute.newRoute().getTotalDistanceKm());
+        System.out.printf("      System Message:   %s%n%n", reroute.message());
+
+        // Demonstrate Multiple Incidents Rule: Resolve Incident 1
+        System.out.println("  >>> Resolving Incident 1 (Accident cleared):");
+        incidentService.resolveIncident("INC-COLLISION-01");
+        System.out.printf("      Road INT-C -> INT-D status: %s (Still blocked by Construction? %s)%n",
+                graph.isRoadClosed("INT-C", "INT-D") ? "CLOSED" : "OPEN",
+                incidentService.isRoadBlocked("INT-C", "INT-D"));
+
+        // Resolve Incident 2: Road now reopens!
+        System.out.println("  >>> Resolving Incident 2 (Construction finished):");
+        incidentService.resolveIncident("INC-REPAIR-02");
+        System.out.printf("      Road INT-C -> INT-D status: %s (All incidents resolved!)%n%n",
+                graph.isRoadAvailable("INT-C", "INT-D") ? "OPEN (Restored)" : "CLOSED");
+
+        // Demonstrate Unrelated Incident: Incident on INT-A -> INT-B does not disturb active route
+        System.out.println("  >>> Simulating incident on unrelated road (INT-A -> INT-B):");
+        incidentService.reportIncident(RoadIncident.temporaryBlockage("INC-UNRELATED", "INT-A", "INT-B", now, now.plusSeconds(1800)));
+        List<RerouteResponse> unrelatedResponses = reroutingService.onRoadClosure("INT-A", "INT-B");
+        System.out.printf("      Reroute Decision: %s (Reason: %s - Unnecessary recalculation avoided!)%n%n",
+                unrelatedResponses.get(0).status(), unrelatedResponses.get(0).triggerReason());
 
         // 7. Edge Case Demonstrations
-        System.out.println("[Step 6] Verifying Network Integrity and Boundary Cases:");
+        System.out.println("[Step 7] Verifying Network Integrity and Boundary Cases:");
 
         // Case A: Source == Destination
         System.out.println("  A. Source equals Destination (AMB-01 -> AMB-01):");
@@ -121,7 +177,7 @@ public class ResQRouteDemo {
 
         System.out.println();
         System.out.println("================================================================================");
-        System.out.println(" [SUCCESS] Phase 5 ResQRoute Route Reconstruction & Alternatives verified.");
+        System.out.println(" [SUCCESS] Phase 7 ResQRoute Road Closures & Automatic Rerouting verified.");
         System.out.println("================================================================================");
     }
 
@@ -129,36 +185,8 @@ public class ResQRouteDemo {
         System.out.println("""
                 ================================================================================
                   ResQRoute: Smart Emergency Ambulance Dispatch & Route Optimization System
-                  Phase 5: Route Reconstruction, Yen's K-Shortest Paths & Route Comparison
+                  Phase 7: Road Closures, Incident Management & Automatic Rerouting Engine
                 ================================================================================
                 """);
-    }
-
-    private static void printComparisonAnalysis(RouteResult optimalRoute) {
-        double shortestDistanceKm = 4.5;
-        double shortestDistanceTimeMin = 21.0;
-
-        double chosenDistanceKm = optimalRoute.getTotalDistanceKm();
-        double chosenTimeMin = optimalRoute.getTotalTravelTimeMinutes();
-        double timeSavedMin = shortestDistanceTimeMin - chosenTimeMin;
-        double percentSaved = (timeSavedMin / shortestDistanceTimeMin) * 100.0;
-
-        System.out.println("""
-                --------------------------------------------------------------------------------
-                CRITICAL EMERGENCY ROUTING COMPARISON:
-                --------------------------------------------------------------------------------
-                Metric                  | Route 1 (Shortest Distance) | Route 2 (ResQRoute Time-Optimal)
-                ------------------------+-----------------------------+---------------------------------
-                Route Profile           | Congested Old City Market   | High-Speed Expressway Corridor
-                Physical Distance       | 4.50 km [SHORTEST]          | 8.00 km (+77.8% longer)
-                Estimated Travel Time   | 21.00 minutes               | 7.70 minutes [FASTEST]
-                Average Vehicle Speed   | 12.9 km/h (severe traffic)  | 62.3 km/h (free-flow)
-                ------------------------+-----------------------------+---------------------------------
-                """);
-        System.out.printf("  >>> LIFE-SAVING ADVANTAGE: ResQRoute saved %.2f minutes (%.1f%% faster!)%n",
-                timeSavedMin, percentSaved);
-        System.out.println("      In emergency dispatch, optimizing for MINIMUM TRAVEL TIME rather than");
-        System.out.println("      geographic distance preserves the Golden Hour and directly saves lives.");
-        System.out.println("--------------------------------------------------------------------------------\n");
     }
 }

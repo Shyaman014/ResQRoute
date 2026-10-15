@@ -124,6 +124,11 @@ public class DijkstraRoutingAlgorithm implements RoutingAlgorithm {
             for (Edge edge : graph.getOutgoingEdges(u)) {
                 validateEdgeCost(edge);
 
+                // Skip temporarily closed roads
+                if (edge.isClosed()) {
+                    continue;
+                }
+
                 Node vNode = edge.getDestination();
                 String v = vNode.getId();
 

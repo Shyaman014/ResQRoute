@@ -5,6 +5,7 @@ import com.resqroute.algorithm.RoutingAlgorithm;
 import com.resqroute.algorithm.YenKShortestPathsAlgorithm;
 import com.resqroute.exception.RouteNotFoundException;
 import com.resqroute.graph.RoadGraph;
+import com.resqroute.model.Node;
 import com.resqroute.model.RouteComparisonReport;
 import com.resqroute.model.RouteResult;
 
@@ -24,6 +25,8 @@ public class RouteOptimizationService {
     private final RoutingAlgorithm routingAlgorithm;
     private final YenKShortestPathsAlgorithm yenAlgorithm;
     private final RouteComparisonService comparisonService;
+    private final RoadIncidentService incidentService;
+    private final AutomaticReroutingService reroutingService;
 
     /**
      * Constructs a RouteOptimizationService with custom road graph and routing strategy.
@@ -36,6 +39,8 @@ public class RouteOptimizationService {
         this.routingAlgorithm = Objects.requireNonNull(routingAlgorithm, "RoutingAlgorithm must not be null");
         this.yenAlgorithm = new YenKShortestPathsAlgorithm();
         this.comparisonService = new RouteComparisonService();
+        this.incidentService = new RoadIncidentService(roadGraph);
+        this.reroutingService = new AutomaticReroutingService(roadGraph);
     }
 
     /**
@@ -100,6 +105,63 @@ public class RouteOptimizationService {
             return new RouteComparisonReport(sourceId, destinationId, List.of());
         }
         return comparisonService.compareRoutes(routes);
+    }
+
+    /**
+     * Evaluates whether an active or previous route should be dynamically rerouted under current traffic conditions.
+     * Re-evaluates the existing route path against the current state of the road graph, calculates the latest
+     * optimal path, and determines if a reroute is warranted based on a minimum time-savings threshold.
+     *
+     * @param previousRoute            The route previously selected.
+     * @param minTimeSavedThresholdMin Minimum time savings in minutes required to recommend rerouting (e.g. 1.0 min).
+     * @return Detailed RerouteEvaluation.
+     */
+    public com.resqroute.model.RerouteEvaluation evaluateReroute(RouteResult previousRoute, double minTimeSavedThresholdMin) {
+        Objects.requireNonNull(previousRoute, "Previous route must not be null");
+        String src = previousRoute.getSourceId();
+        String dst = previousRoute.getDestinationId();
+
+        List<Node> nodes = previousRoute.getPath();
+        List<com.resqroute.model.Edge> currentEdges = new java.util.ArrayList<>();
+        double totalTime = 0.0;
+        double totalDist = 0.0;
+
+        for (int i = 0; i < nodes.size() - 1; i++) {
+            String u = nodes.get(i).getId();
+            String v = nodes.get(i + 1).getId();
+            java.util.Optional<com.resqroute.model.Edge> edgeOpt = roadGraph.getEdge(u, v);
+            if (edgeOpt.isEmpty() || edgeOpt.get().isClosed()) {
+                RouteResult currentFastest = findFastestRoute(src, dst);
+                return new com.resqroute.model.RerouteEvaluation(
+                        src,
+                        dst,
+                        previousRoute,
+                        RouteResult.unreachable(src, dst),
+                        currentFastest,
+                        true,
+                        Double.POSITIVE_INFINITY,
+                        100.0,
+                        "CRITICAL REROUTE: Road segment " + u + " -> " + v + " is closed or no longer traversable!"
+                );
+            }
+            com.resqroute.model.Edge currentEdge = edgeOpt.get();
+            currentEdges.add(currentEdge);
+            totalDist += currentEdge.getDistanceKm();
+            totalTime += currentEdge.getTravelTimeMinutes();
+        }
+
+        RouteResult updatedPreviousRoute = RouteResult.reachable(nodes, currentEdges, totalDist, totalTime);
+        RouteResult currentFastestRoute = findFastestRoute(src, dst);
+
+        return com.resqroute.model.RerouteEvaluation.evaluate(previousRoute, updatedPreviousRoute, currentFastestRoute, minTimeSavedThresholdMin);
+    }
+
+    public RoadIncidentService getIncidentService() {
+        return incidentService;
+    }
+
+    public AutomaticReroutingService getReroutingService() {
+        return reroutingService;
     }
 
     public RoadGraph getRoadGraph() {

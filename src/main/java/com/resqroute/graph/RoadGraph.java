@@ -6,6 +6,8 @@ import com.resqroute.exception.InvalidEdgeException;
 import com.resqroute.exception.NodeNotFoundException;
 import com.resqroute.model.Edge;
 import com.resqroute.model.Node;
+import com.resqroute.model.TrafficCondition;
+import com.resqroute.model.TrafficLevel;
 
 import java.util.*;
 
@@ -149,7 +151,7 @@ public class RoadGraph {
             Edge current = edges.get(i);
             if (current.getDestination().getId().equals(destination.getId())) {
                 String effectiveRoadName = (roadName != null) ? roadName : current.getRoadName();
-                edges.set(i, new Edge(source, destination, distanceKm, travelTimeMinutes, effectiveRoadName));
+                edges.set(i, new Edge(source, destination, distanceKm, travelTimeMinutes, current.getTrafficCondition(), effectiveRoadName, current.isAvailable()));
                 return;
             }
         }
@@ -162,6 +164,148 @@ public class RoadGraph {
     public void updateEdge(String sourceId, String destinationId, double distanceKm, double travelTimeMinutes) {
         updateEdge(sourceId, destinationId, distanceKm, travelTimeMinutes, null);
     }
+
+    /**
+     * Updates the dynamic traffic condition on an existing directed road segment.
+     * Static road distance and base travel time remain strictly preserved.
+     *
+     * @param sourceId      Source node identifier.
+     * @param destinationId Destination node identifier.
+     * @param condition     New dynamic traffic condition; must not be null.
+     * @throws InvalidEdgeException if road does not exist.
+     */
+    public void updateTraffic(String sourceId, String destinationId, TrafficCondition condition) {
+        validateNodeId(sourceId, "Source");
+        validateNodeId(destinationId, "Destination");
+        Objects.requireNonNull(condition, "TrafficCondition must not be null");
+
+        Node source = getRequiredNode(sourceId);
+        Node destination = getRequiredNode(destinationId);
+
+        List<Edge> edges = adjacencyList.get(source.getId());
+        for (int i = 0; i < edges.size(); i++) {
+            Edge current = edges.get(i);
+            if (current.getDestination().getId().equals(destination.getId())) {
+                edges.set(i, current.withTrafficCondition(condition));
+                return;
+            }
+        }
+        throw new InvalidEdgeException(String.format("Cannot update traffic: road from '%s' to '%s' does not exist.", sourceId, destinationId));
+    }
+
+    /**
+     * Updates the dynamic traffic condition on an existing directed road segment using standard TrafficLevel.
+     */
+    public void updateTraffic(String sourceId, String destinationId, TrafficLevel level) {
+        updateTraffic(sourceId, destinationId, TrafficCondition.of(level, "ROAD_TELEMETRY"));
+    }
+
+    /**
+     * Updates dynamic traffic conditions on a bidirectional roadway in both directions.
+     */
+    public void updateBidirectionalTraffic(String nodeAId, String nodeBId, TrafficCondition condition) {
+        updateTraffic(nodeAId, nodeBId, condition);
+        updateTraffic(nodeBId, nodeAId, condition);
+    }
+
+    /**
+     * Updates dynamic traffic conditions on a bidirectional roadway using standard TrafficLevel.
+     */
+    public void updateBidirectionalTraffic(String nodeAId, String nodeBId, TrafficLevel level) {
+        updateBidirectionalTraffic(nodeAId, nodeBId, TrafficCondition.of(level, "ROAD_TELEMETRY"));
+    }
+
+    /**
+     * Updates the operational availability of an existing directed road segment.
+     * Original road distance, base travel time, and traffic conditions remain strictly preserved.
+     *
+     * @param sourceId      Source node identifier.
+     * @param destinationId Destination node identifier.
+     * @param available     true if road is open, false if temporarily closed.
+     * @throws InvalidEdgeException if road does not exist.
+     */
+    public void setRoadAvailability(String sourceId, String destinationId, boolean available) {
+        validateNodeId(sourceId, "Source");
+        validateNodeId(destinationId, "Destination");
+
+        Node source = getRequiredNode(sourceId);
+        Node destination = getRequiredNode(destinationId);
+
+        List<Edge> edges = adjacencyList.get(source.getId());
+        for (int i = 0; i < edges.size(); i++) {
+            Edge current = edges.get(i);
+            if (current.getDestination().getId().equals(destination.getId())) {
+                edges.set(i, current.withAvailability(available));
+                return;
+            }
+        }
+        throw new InvalidEdgeException(String.format("Cannot update road availability: road from '%s' to '%s' does not exist.", sourceId, destinationId));
+    }
+
+    /**
+     * Updates operational availability in both directions for a bidirectional roadway.
+     */
+    public void setBidirectionalRoadAvailability(String nodeAId, String nodeBId, boolean available) {
+        setRoadAvailability(nodeAId, nodeBId, available);
+        setRoadAvailability(nodeBId, nodeAId, available);
+    }
+
+    /**
+     * Temporarily closes an individual directed road segment to traffic.
+     */
+    public void closeRoad(String sourceId, String destinationId) {
+        setRoadAvailability(sourceId, destinationId, false);
+    }
+
+    /**
+     * Reopens a previously closed directed road segment.
+     */
+    public void reopenRoad(String sourceId, String destinationId) {
+        setRoadAvailability(sourceId, destinationId, true);
+    }
+
+    /**
+     * Temporarily closes a bidirectional roadway in both directions.
+     */
+    public void closeBidirectionalRoad(String nodeAId, String nodeBId) {
+        setBidirectionalRoadAvailability(nodeAId, nodeBId, false);
+    }
+
+    /**
+     * Reopens a bidirectional roadway in both directions.
+     */
+    public void reopenBidirectionalRoad(String nodeAId, String nodeBId) {
+        setBidirectionalRoadAvailability(nodeAId, nodeBId, true);
+    }
+
+    /**
+     * Checks whether a directed road segment exists and is currently open to traffic.
+     */
+    public boolean isRoadAvailable(String sourceId, String destinationId) {
+        return getEdge(sourceId, destinationId).map(Edge::isAvailable).orElse(false);
+    }
+
+    /**
+     * Checks whether a directed road segment exists and is currently closed.
+     */
+    public boolean isRoadClosed(String sourceId, String destinationId) {
+        return getEdge(sourceId, destinationId).map(Edge::isClosed).orElse(false);
+    }
+
+    /**
+     * Retrieves an unmodifiable list of all road segments currently closed to traffic.
+     */
+    public List<Edge> getClosedEdges() {
+        return getAllEdges().stream().filter(Edge::isClosed).toList();
+    }
+
+    /**
+     * Retrieves an unmodifiable list of all road segments currently open to traffic.
+     */
+    public List<Edge> getAvailableEdges() {
+        return getAllEdges().stream().filter(Edge::isAvailable).toList();
+    }
+
 
     /**
      * Inserts a bidirectional (two-way) roadway connecting two nodes.

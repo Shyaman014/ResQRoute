@@ -120,5 +120,25 @@ class ModelValidationTest {
         assertTrue(updatedWithSource.getSource().isPresent());
         assertEquals(src, updatedWithSource.getSource().get());
     }
+
+    @Test
+    @DisplayName("Edge with dynamic TrafficCondition scales travel time but preserves base time and distance")
+    void edgeDynamicTrafficSeparation() {
+        Node src = new Node("SRC", 10.0, 20.0);
+        Node dst = new Node("DST", 11.0, 21.0);
+
+        Edge baseEdge = new Edge(src, dst, 10.0, 10.0, "Avenue");
+        assertEquals(10.0, baseEdge.getBaseTravelTimeMinutes());
+        assertEquals(10.0, baseEdge.getTravelTimeMinutes());
+
+        TrafficCondition heavy = TrafficCondition.of(TrafficLevel.HEAVY, "CAMERA_FEED");
+        Edge heavyEdge = baseEdge.withTrafficCondition(heavy);
+
+        assertEquals(10.0, heavyEdge.getDistanceKm(), "Distance must not be affected by traffic");
+        assertEquals(10.0, heavyEdge.getBaseTravelTimeMinutes(), "Base travel time must remain static");
+        assertEquals(22.0, heavyEdge.getTravelTimeMinutes(), 1e-4, "Current travel time must reflect congestion multiplier");
+        assertEquals(heavy, heavyEdge.getTrafficCondition());
+    }
 }
+
 

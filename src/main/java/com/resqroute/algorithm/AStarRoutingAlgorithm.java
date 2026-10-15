@@ -4,6 +4,7 @@ import com.resqroute.exception.InvalidCostException;
 import com.resqroute.exception.NodeNotFoundException;
 import com.resqroute.graph.RoadGraph;
 import com.resqroute.model.Edge;
+import com.resqroute.model.EdgeKey;
 import com.resqroute.model.Node;
 import com.resqroute.model.RouteResult;
 
@@ -96,12 +97,36 @@ public class AStarRoutingAlgorithm implements RoutingAlgorithm {
 
     @Override
     public RouteResult findFastestRoute(RoadGraph graph, String sourceId, String destinationId) {
+        return findFastestRoute(graph, sourceId, destinationId, Collections.emptySet(), Collections.emptySet());
+    }
+
+    /**
+     * Calculates the fastest emergency route with A* while ignoring excluded nodes, excluded edges,
+     * and temporarily closed or disabled roadways.
+     *
+     * @param graph           Road network graph.
+     * @param sourceId        Origin waypoint identifier.
+     * @param destinationId   Destination waypoint identifier.
+     * @param excludedNodeIds Set of node IDs to avoid during traversal; may be empty or null.
+     * @param excludedEdges   Set of directed edge keys to avoid; may be empty or null.
+     * @return Reachable RouteResult, or unreachable if no valid path exists.
+     */
+    public RouteResult findFastestRoute(RoadGraph graph,
+                                        String sourceId,
+                                        String destinationId,
+                                        Set<String> excludedNodeIds,
+                                        Set<EdgeKey> excludedEdges) {
         Objects.requireNonNull(graph, "RoadGraph must not be null");
         validateNodeId(sourceId, "Source");
         validateNodeId(destinationId, "Destination");
 
         String srcTrimmed = sourceId.trim();
         String dstTrimmed = destinationId.trim();
+
+        // If source or destination are explicitly excluded, path is unreachable
+        if (excludedNodeIds != null && (excludedNodeIds.contains(srcTrimmed) || excludedNodeIds.contains(dstTrimmed))) {
+            return RouteResult.unreachable(srcTrimmed, dstTrimmed);
+        }
 
         Node sourceNode = graph.getRequiredNode(srcTrimmed);
         Node destinationNode = graph.getRequiredNode(dstTrimmed);
@@ -150,8 +175,23 @@ public class AStarRoutingAlgorithm implements RoutingAlgorithm {
             for (Edge edge : graph.getOutgoingEdges(u)) {
                 validateEdgeCost(edge);
 
+                // Skip temporarily closed roads
+                if (edge.isClosed()) {
+                    continue;
+                }
+
                 Node vNode = edge.getDestination();
                 String v = vNode.getId();
+
+                // Skip excluded nodes
+                if (excludedNodeIds != null && excludedNodeIds.contains(v)) {
+                    continue;
+                }
+
+                // Skip excluded directed edges
+                if (excludedEdges != null && excludedEdges.contains(new EdgeKey(u, v))) {
+                    continue;
+                }
 
                 if (closedSet.contains(v)) {
                     continue;
@@ -192,7 +232,7 @@ public class AStarRoutingAlgorithm implements RoutingAlgorithm {
 
         double maxSpeedFound = DEFAULT_SPEED_BOUND_KMH;
         for (Edge edge : graph.getAllEdges()) {
-            double speed = edge.getAverageSpeedKmh();
+            double speed = edge.getFreeFlowSpeedKmh();
             if (!Double.isNaN(speed) && !Double.isInfinite(speed) && speed > maxSpeedFound) {
                 maxSpeedFound = speed;
             }
