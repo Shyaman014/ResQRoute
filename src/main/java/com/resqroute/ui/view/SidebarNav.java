@@ -6,6 +6,7 @@ import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.control.Button;
 import javafx.scene.control.Label;
+import javafx.scene.control.Tooltip;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.VBox;
@@ -70,7 +71,7 @@ public class SidebarNav extends VBox {
         footerBox.setPadding(new Insets(12, 6, 0, 6));
         footerBox.getStyleClass().add("sidebar-footer");
 
-        Label buildLabel = new Label("ResQRoute v1.0 • Phase 16");
+        Label buildLabel = new Label("ResQRoute Core v1.0 • Phase 24");
         buildLabel.getStyleClass().add("footer-build");
 
         Label runtimeLabel = new Label("Java 21 • JavaFX Desktop");
@@ -89,6 +90,10 @@ public class SidebarNav extends VBox {
         btn.setMaxWidth(Double.MAX_VALUE);
         btn.setAlignment(Pos.CENTER_LEFT);
         btn.getStyleClass().add("nav-button");
+
+        btn.setAccessibleText("Navigate to " + section.getTitle());
+        btn.setAccessibleHelp("Displays the " + section.getTitle() + " screen");
+        btn.setTooltip(new Tooltip("Navigate to " + section.getTitle() + " (Alt+" + (section.ordinal() + 1) + ")"));
 
         btn.setOnAction(e -> navigationController.navigateTo(section));
         return btn;

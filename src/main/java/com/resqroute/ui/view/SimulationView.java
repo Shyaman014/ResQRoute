@@ -6,6 +6,7 @@ import com.resqroute.simulation.model.CityScenario;
 import com.resqroute.ui.component.EmptyStateView;
 import com.resqroute.ui.component.SectionHeader;
 import com.resqroute.ui.component.StatCard;
+import com.resqroute.ui.component.UiDialogs;
 import com.resqroute.ui.controller.SimulationPresentationModel;
 import com.resqroute.ui.model.UiSimulationState;
 import javafx.beans.property.SimpleStringProperty;
@@ -77,27 +78,49 @@ public class SimulationView extends ScrollPane {
 
         initBtn = new Button("🚀 Init Metropolis");
         initBtn.getStyleClass().addAll("action-btn", "btn-primary");
+        initBtn.setAccessibleText("Initialize Default Metropolis Scenario");
+        initBtn.setTooltip(new Tooltip("Initialize Metropolis scenario with complete fleet and road graph"));
         initBtn.setOnAction(e -> model.initializeDefaultScenario());
 
         playPauseBtn = new Button("▶ Play");
         playPauseBtn.getStyleClass().addAll("action-btn", "btn-success");
+        playPauseBtn.setAccessibleText("Toggle continuous simulation execution");
+        playPauseBtn.setTooltip(new Tooltip("Start or pause automatic simulation runner"));
         playPauseBtn.setOnAction(e -> model.togglePlayPause());
 
         step30sBtn = new Button("+30s");
         step30sBtn.getStyleClass().addAll("action-btn", "btn-secondary");
+        step30sBtn.setAccessibleText("Step forward 30 seconds");
+        step30sBtn.setTooltip(new Tooltip("Advance simulation discrete clock by 30 seconds"));
         step30sBtn.setOnAction(e -> model.step(Duration.ofSeconds(30)));
 
         step1mBtn = new Button("+1m");
         step1mBtn.getStyleClass().addAll("action-btn", "btn-secondary");
+        step1mBtn.setAccessibleText("Step forward 1 minute");
+        step1mBtn.setTooltip(new Tooltip("Advance simulation discrete clock by 1 minute"));
         step1mBtn.setOnAction(e -> model.step(Duration.ofMinutes(1)));
 
         step5mBtn = new Button("+5m");
         step5mBtn.getStyleClass().addAll("action-btn", "btn-secondary");
+        step5mBtn.setAccessibleText("Step forward 5 minutes");
+        step5mBtn.setTooltip(new Tooltip("Advance simulation discrete clock by 5 minutes"));
         step5mBtn.setOnAction(e -> model.step(Duration.ofMinutes(5)));
 
         resetBtn = new Button("🔄 Reset");
         resetBtn.getStyleClass().addAll("action-btn", "btn-danger");
-        resetBtn.setOnAction(e -> model.reset());
+        resetBtn.setAccessibleText("Reset simulation scenario");
+        resetBtn.setTooltip(new Tooltip("Reset simulation and fleet back to scenario origin"));
+        resetBtn.setOnAction(e -> {
+            boolean confirmed = UiDialogs.confirm(
+                    getScene() != null ? getScene().getWindow() : null,
+                    "Confirm Simulation Reset",
+                    "Reset Simulation & Fleet Back to Origin?",
+                    "This action will reset the simulation clock, cancel in-progress transports, and restore all emergency vehicles to available status."
+            );
+            if (confirmed) {
+                model.reset();
+            }
+        });
 
         HBox spacer = new HBox();
         HBox.setHgrow(spacer, Priority.ALWAYS);
@@ -109,6 +132,8 @@ public class SimulationView extends ScrollPane {
         speedCombo.getItems().addAll("Slow (1.2s)", "Normal (0.8s)", "Fast (0.3s)", "Turbo (0.1s)");
         speedCombo.setValue("Normal (0.8s)");
         speedCombo.getStyleClass().add("toolbar-combo");
+        speedCombo.setAccessibleText("Simulation playback tick rate");
+        speedCombo.setTooltip(new Tooltip("Adjust background simulation tick interval"));
         speedCombo.setOnAction(e -> {
             String val = speedCombo.getValue();
             if (val != null) {
@@ -236,13 +261,35 @@ public class SimulationView extends ScrollPane {
         descCol.setCellValueFactory(d -> new SimpleStringProperty(d.getValue().message()));
         descCol.setPrefWidth(360);
 
+        t.setRowFactory(tv -> {
+            TableRow<SimulationEvent> row = new TableRow<>();
+            row.setOnMouseClicked(event -> {
+                if (event.getClickCount() == 2 && !row.isEmpty()) {
+                    SimulationEvent ev = row.getItem();
+                    UiDialogs.info(getScene().getWindow(),
+                            "Simulation Event Details",
+                            "Event #" + ev.sequenceId() + " (" + ev.type().name() + ")",
+                            "Simulation Timestamp: " + SimulationPresentationModel.formatDuration(ev.simulationTime()) +
+                                    "\nTarget Entity: " + ev.entityId() +
+                                    "\nEvent Message: " + ev.message());
+                }
+            });
+            return row;
+        });
+
         t.getColumns().addAll(seqCol, timeCol, typeCol, targetCol, descCol);
         return t;
     }
 
     public void refresh() {
+        boolean isRunning = model.getUiState() == UiSimulationState.RUNNING;
+        step30sBtn.setDisable(isRunning);
+        step1mBtn.setDisable(isRunning);
+        step5mBtn.setDisable(isRunning);
+        initBtn.setDisable(isRunning);
+
         // Play / pause button styling
-        if (model.getUiState() == UiSimulationState.RUNNING) {
+        if (isRunning) {
             playPauseBtn.setText("⏸ Pause");
             playPauseBtn.getStyleClass().removeAll("btn-success");
             if (!playPauseBtn.getStyleClass().contains("btn-warning")) {

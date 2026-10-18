@@ -67,6 +67,8 @@ public class SettingsView extends ScrollPane {
         seedLabel.getStyleClass().add("param-label");
         seedField = new TextField(String.valueOf(model.getRandomSeed()));
         seedField.getStyleClass().add("settings-field");
+        seedField.setAccessibleText("Deterministic pseudo-random number generator seed");
+        seedField.setTooltip(new Tooltip("64-bit integer seed for reproducible traffic incidents and scenario generation"));
 
         Label stepLabel = new Label("Default Step Duration (Seconds):");
         stepLabel.getStyleClass().add("param-label");
@@ -74,6 +76,8 @@ public class SettingsView extends ScrollPane {
         stepSizeCombo.getItems().addAll(15, 30, 60, 120, 300);
         stepSizeCombo.setValue((int) model.getDefaultStepDuration().toSeconds());
         stepSizeCombo.getStyleClass().add("settings-field");
+        stepSizeCombo.setAccessibleText("Default simulation step duration in seconds");
+        stepSizeCombo.setTooltip(new Tooltip("Discrete quantum of logical time advanced per step"));
 
         Label intervalLabel = new Label("Auto-Runner Tick Delay (ms):");
         intervalLabel.getStyleClass().add("param-label");
@@ -81,6 +85,8 @@ public class SettingsView extends ScrollPane {
         tickIntervalCombo.getItems().addAll(100L, 300L, 500L, 800L, 1200L, 2000L);
         tickIntervalCombo.setValue(model.getAutoRunIntervalMs());
         tickIntervalCombo.getStyleClass().add("settings-field");
+        tickIntervalCombo.setAccessibleText("Background execution runner delay in milliseconds");
+        tickIntervalCombo.setTooltip(new Tooltip("Real-world interval between consecutive simulation ticks"));
 
         formGrid.add(seedLabel, 0, 0);
         formGrid.add(seedField, 1, 0);
@@ -91,6 +97,8 @@ public class SettingsView extends ScrollPane {
 
         Button saveBtn = new Button("💾 Save & Apply Settings");
         saveBtn.getStyleClass().addAll("action-btn", "btn-primary");
+        saveBtn.setAccessibleText("Save and apply new simulation settings");
+        saveBtn.setTooltip(new Tooltip("Persist configuration changes to live engine"));
         saveBtn.setOnAction(e -> applySettings());
 
         configCard.getChildren().addAll(configTitle, formGrid, saveBtn);

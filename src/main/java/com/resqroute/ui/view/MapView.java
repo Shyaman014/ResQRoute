@@ -6,6 +6,7 @@ import com.resqroute.simulation.model.AmbulanceMovementTelemetry;
 import com.resqroute.simulation.model.VehicleVisualState;
 import com.resqroute.ui.component.SectionHeader;
 import com.resqroute.ui.component.StatusBadge;
+import com.resqroute.ui.component.UiDialogs;
 import com.resqroute.ui.controller.SimulationPresentationModel;
 import com.resqroute.ui.map.MapCoordinateTransform;
 import com.resqroute.ui.map.RoadNetworkCanvas;
@@ -22,8 +23,10 @@ import java.util.Objects;
 import java.util.Optional;
 
 /**
- * Interactive map view providing full visualization of the city's road network, real-time traffic congestion,
- * road closures, calculated emergency routes, live ambulance movement animation, and integrated simulation controls.
+ * Interactive map view providing full visualization of the city's road network,
+ * real-time traffic congestion,
+ * road closures, calculated emergency routes, live ambulance movement
+ * animation, and integrated simulation controls.
  */
 public class MapView extends BorderPane {
 
@@ -86,8 +89,7 @@ public class MapView extends BorderPane {
         VBox topContainer = new VBox(10);
         SectionHeader header = new SectionHeader(
                 "Interactive City Map & Live Simulation Controls",
-                "Real-time vehicle animation, dynamic rerouting, topological inspection, and time-step execution"
-        );
+                "Real-time vehicle animation, dynamic rerouting, topological inspection, and time-step execution");
 
         // Control Toolbar
         statusPillLabel = new Label("IDLE");
@@ -98,26 +100,46 @@ public class MapView extends BorderPane {
 
         playPauseBtn = new Button("▶ Play");
         playPauseBtn.getStyleClass().addAll("action-btn", "btn-success");
+        playPauseBtn.setAccessibleText("Toggle continuous simulation execution");
+        playPauseBtn.setTooltip(new Tooltip("Start or pause live simulation movement animation"));
         playPauseBtn.setOnAction(e -> model.togglePlayPause());
 
         stepBtn = new Button("⏭ Step");
         stepBtn.getStyleClass().addAll("action-btn", "btn-secondary");
+        stepBtn.setAccessibleText("Step forward in simulation time");
+        stepBtn.setTooltip(new Tooltip("Step simulation forward by selected duration"));
         stepBtn.setOnAction(e -> executeSelectedStep());
 
         stepDurationCombo = new ComboBox<>();
         stepDurationCombo.getItems().addAll("+10s", "+30s", "+1m", "+5m");
         stepDurationCombo.setValue("+30s");
         stepDurationCombo.getStyleClass().add("toolbar-combo");
+        stepDurationCombo.setAccessibleText("Single-step time advancement quantum");
+        stepDurationCombo.setTooltip(new Tooltip("Select duration for each step"));
 
         speedCombo = new ComboBox<>();
         speedCombo.getItems().addAll("0.25x (Slow)", "0.5x", "1.0x (Normal)", "2.0x (Fast)", "4.0x (Turbo)");
         speedCombo.setValue("1.0x (Normal)");
         speedCombo.getStyleClass().add("toolbar-combo");
+        speedCombo.setAccessibleText("Animation playback speed multiplier");
+        speedCombo.setTooltip(new Tooltip("Adjust vehicle animation playback speed"));
         speedCombo.setOnAction(e -> handleSpeedSelection());
 
         resetBtn = new Button("🔄 Reset");
         resetBtn.getStyleClass().addAll("action-btn", "btn-danger");
-        resetBtn.setOnAction(e -> model.reset());
+        resetBtn.setAccessibleText("Reset simulation scenario");
+        resetBtn.setTooltip(new Tooltip("Reset simulation and vehicle movements back to origin"));
+        resetBtn.setOnAction(e -> {
+            boolean confirmed = UiDialogs.confirm(
+                    getScene() != null ? getScene().getWindow() : null,
+                    "Confirm Simulation Reset",
+                    "Reset Simulation & Vehicle Dispatches?",
+                    "This action will reset the simulation clock, cancel in-progress transports, and restore all emergency vehicles to available status."
+            );
+            if (confirmed) {
+                model.reset();
+            }
+        });
 
         HBox toolbar = createLiveSimulationToolbar();
         topContainer.getChildren().addAll(header, toolbar);
@@ -163,7 +185,8 @@ public class MapView extends BorderPane {
         destCombo.getStyleClass().add("toolbar-combo");
 
         algoCombo = new ComboBox<>();
-        algoCombo.getItems().addAll("Dijkstra (Fastest Path)", "A* Algorithm (Haversine)", "Yen's K-Shortest (3 Alternatives)");
+        algoCombo.getItems().addAll("Dijkstra (Fastest Path)", "A* Algorithm (Haversine)",
+                "Yen's K-Shortest (3 Alternatives)");
         algoCombo.setValue("Dijkstra (Fastest Path)");
         algoCombo.setMaxWidth(Double.MAX_VALUE);
         algoCombo.getStyleClass().add("toolbar-combo");
@@ -198,7 +221,8 @@ public class MapView extends BorderPane {
 
         alternativeRoutesBox = new VBox(4);
 
-        routeDetailsCard.getChildren().addAll(routeStatusLabel, routeDistanceLabel, routeTimeLabel, routeWaypointsLabel, alternativeRoutesBox);
+        routeDetailsCard.getChildren().addAll(routeStatusLabel, routeDistanceLabel, routeTimeLabel, routeWaypointsLabel,
+                alternativeRoutesBox);
 
         routePanel.getChildren().addAll(
                 new Label("Origin Intersection:"), sourceCombo,
@@ -206,8 +230,7 @@ public class MapView extends BorderPane {
                 new Label("Routing Strategy:"), algoCombo,
                 calculateRouteBtn, clearRouteBtn,
                 new Separator(),
-                routeDetailsCard
-        );
+                routeDetailsCard);
         Tab routeTab = new Tab("🧭 Route Planner", routePanel);
         routeTab.setClosable(false);
 
@@ -242,7 +265,8 @@ public class MapView extends BorderPane {
         inspectorTitleLabel = new Label("Select Node, Road, or Ambulance");
         inspectorTitleLabel.getStyleClass().add("card-section-title");
 
-        inspectorDetailsLabel = new Label("Click any vehicle, intersection, or road corridor on the map to inspect live telemetry, operational state, and dynamic route data.");
+        inspectorDetailsLabel = new Label(
+                "Click any vehicle, intersection, or road corridor on the map to inspect live telemetry, operational state, and dynamic route data.");
         inspectorDetailsLabel.getStyleClass().add("param-label");
         inspectorDetailsLabel.setWrapText(true);
 
@@ -290,8 +314,7 @@ public class MapView extends BorderPane {
                 setAsSourceBtn, setAsDestBtn,
                 new Separator(),
                 toggleRoadClosureBtn,
-                sendToBaseBtn
-        );
+                sendToBaseBtn);
         Tab inspectorTab = new Tab("🔍 Inspector", inspectorPanel);
         inspectorTab.setClosable(false);
 
@@ -407,11 +430,16 @@ public class MapView extends BorderPane {
     private void handleSpeedSelection() {
         String val = speedCombo.getValue();
         if (val != null) {
-            if (val.startsWith("0.25x")) model.setAutoRunIntervalMs(1200);
-            else if (val.startsWith("0.5x")) model.setAutoRunIntervalMs(800);
-            else if (val.startsWith("1.0x")) model.setAutoRunIntervalMs(400);
-            else if (val.startsWith("2.0x")) model.setAutoRunIntervalMs(200);
-            else if (val.startsWith("4.0x")) model.setAutoRunIntervalMs(100);
+            if (val.startsWith("0.25x"))
+                model.setAutoRunIntervalMs(1200);
+            else if (val.startsWith("0.5x"))
+                model.setAutoRunIntervalMs(800);
+            else if (val.startsWith("1.0x"))
+                model.setAutoRunIntervalMs(400);
+            else if (val.startsWith("2.0x"))
+                model.setAutoRunIntervalMs(200);
+            else if (val.startsWith("4.0x"))
+                model.setAutoRunIntervalMs(100);
         }
     }
 
@@ -435,8 +463,7 @@ public class MapView extends BorderPane {
                 createLegendItem("══", "#38bdf8", "Active Transit Path"),
                 createLegendItem("══", "#22d3ee", "Planned Route"),
                 createLegendItem("🏥", "#10b981", "Hospital Facility"),
-                createLegendItem("🚨", "#ef4444", "Active Emergency")
-        );
+                createLegendItem("🚨", "#ef4444", "Active Emergency"));
         return legend;
     }
 
@@ -468,7 +495,8 @@ public class MapView extends BorderPane {
 
             StringBuilder sb = new StringBuilder();
             sb.append("Name: ").append(node.getName()).append("\n");
-            sb.append(String.format("Coordinates: %.5f, %.5f\n\n", node.getCoordinates().latitude(), node.getCoordinates().longitude()));
+            sb.append(String.format("Coordinates: %.5f, %.5f\n\n", node.getCoordinates().latitude(),
+                    node.getCoordinates().longitude()));
 
             Optional<RoadGraph> graphOpt = model.getLiveGraph();
             if (graphOpt.isPresent()) {
@@ -482,7 +510,8 @@ public class MapView extends BorderPane {
                 }
             }
 
-            long ambCount = model.getAmbulances().stream().filter(a -> a.getCurrentLocationNodeId().equals(node.getId())).count();
+            long ambCount = model.getAmbulances().stream()
+                    .filter(a -> a.getCurrentLocationNodeId().equals(node.getId())).count();
             if (ambCount > 0) {
                 sb.append("\nAmbulances Stationed: ").append(ambCount).append(" units\n");
             }
@@ -517,7 +546,9 @@ public class MapView extends BorderPane {
             sb.append(String.format("Distance: %.2f km\n", edge.getDistanceKm()));
             sb.append(String.format("Base Travel Time: %.2f min\n", edge.getBaseTravelTimeMinutes()));
             sb.append(String.format("Current Travel Time: %.2f min\n", edge.getTravelTimeMinutes()));
-            sb.append("Traffic State: ").append(edge.getTrafficCondition() != null ? edge.getTrafficCondition().level() : "FREE_FLOW").append("\n");
+            sb.append("Traffic State: ")
+                    .append(edge.getTrafficCondition() != null ? edge.getTrafficCondition().level() : "FREE_FLOW")
+                    .append("\n");
             sb.append("Status: ").append(isAvailable ? "🟢 OPEN / PASSABLE" : "🔴 CLOSED (INCIDENT)").append("\n");
 
             inspectorDetailsLabel.setText(sb.toString());
@@ -545,10 +576,12 @@ public class MapView extends BorderPane {
             sb.append("Next Waypoint: ").append(amb.targetNodeId()).append("\n");
             sb.append("Final Destination: ").append(amb.destinationName()).append("\n");
             sb.append(String.format("Coordinates: %s\n", amb.getFormattedCoordinates()));
-            sb.append(String.format("Progress: %d%% (%s)\n", amb.getProgressPercentage(), amb.isMoving() ? "In Transit" : "Stationary"));
+            sb.append(String.format("Progress: %d%% (%s)\n", amb.getProgressPercentage(),
+                    amb.isMoving() ? "In Transit" : "Stationary"));
             sb.append(String.format("Live ETA: %s\n", amb.getFormattedEta()));
             sb.append(String.format("Heading: %.1f°\n", amb.headingDegrees()));
-            sb.append("Blocked Route: ").append(amb.isBlocked() ? "⚠️ YES (Detour Blocked)" : "NO (Clear)").append("\n");
+            sb.append("Blocked Route: ").append(amb.isBlocked() ? "⚠️ YES (Detour Blocked)" : "NO (Clear)")
+                    .append("\n");
 
             if (amb.caseId() != null) {
                 sb.append("Active Emergency Case: ").append(amb.caseId()).append("\n");
@@ -562,7 +595,8 @@ public class MapView extends BorderPane {
 
     private void resetInspector() {
         inspectorTitleLabel.setText("Select Node, Road, or Ambulance");
-        inspectorDetailsLabel.setText("Click any vehicle, intersection, or road corridor on the map to inspect live telemetry, operational state, and dynamic route data.");
+        inspectorDetailsLabel.setText(
+                "Click any vehicle, intersection, or road corridor on the map to inspect live telemetry, operational state, and dynamic route data.");
         setAsSourceBtn.setDisable(true);
         setAsDestBtn.setDisable(true);
         toggleRoadClosureBtn.setDisable(true);
@@ -570,15 +604,23 @@ public class MapView extends BorderPane {
     }
 
     private void toggleSelectedRoadClosure() {
-        if (currentlySelectedEdge == null) return;
+        if (currentlySelectedEdge == null)
+            return;
         Edge edge = currentlySelectedEdge.edge();
         String src = currentlySelectedEdge.sourceNodeId();
         String dst = edge.getDestination().getId();
 
         if (edge.isAvailable()) {
+            boolean confirmed = UiDialogs.confirm(
+                    getScene() != null ? getScene().getWindow() : null,
+                    "Confirm Road Corridor Closure",
+                    "Close Road Segment: " + src + " ➔ " + dst + "?",
+                    "Closing this road corridor will block traffic, update travel times to infinity, and trigger dynamic rerouting for all active emergency vehicles navigating this path."
+            );
+            if (!confirmed) return;
             model.reportRoadClosure(src, dst, "Manual dispatcher closure");
         } else {
-            // Find incident ID
+            // Reopen road incident
             model.getActiveIncidents().stream()
                     .filter(inc -> inc.getSourceNodeId().equals(src) && inc.getDestinationNodeId().equals(dst))
                     .findFirst()
@@ -664,7 +706,8 @@ public class MapView extends BorderPane {
         List<Node> nodes = route.getPath();
         for (int i = 0; i < nodes.size(); i++) {
             pathBuilder.append(nodes.get(i).getId());
-            if (i < nodes.size() - 1) pathBuilder.append(" ➔ ");
+            if (i < nodes.size() - 1)
+                pathBuilder.append(" ➔ ");
         }
         routeWaypointsLabel.setText(pathBuilder.toString());
     }
@@ -677,7 +720,8 @@ public class MapView extends BorderPane {
 
         for (int i = 1; i < routes.size(); i++) {
             RouteResult alt = routes.get(i);
-            Label l = new Label(String.format(" • Alt #%d: %.2f min (%.2f km)", i, alt.getTotalTravelTimeMinutes(), alt.getTotalDistanceKm()));
+            Label l = new Label(String.format(" • Alt #%d: %.2f min (%.2f km)", i, alt.getTotalTravelTimeMinutes(),
+                    alt.getTotalDistanceKm()));
             l.setStyle("-fx-text-fill: #cbd5e1; -fx-font-size: 11px;");
             alternativeRoutesBox.getChildren().add(l);
         }
@@ -707,7 +751,13 @@ public class MapView extends BorderPane {
         // 1. Update Simulation Status Pill & Time Badge
         UiSimulationState uiState = model.getUiState();
         statusPillLabel.setText(uiState.name());
-        statusPillLabel.getStyleClass().removeAll("sim-status-running", "sim-status-paused", "sim-status-completed", "sim-status-idle");
+        statusPillLabel.getStyleClass().removeAll("sim-status-running", "sim-status-paused", "sim-status-completed",
+                "sim-status-idle");
+
+        boolean isRunning = (uiState == UiSimulationState.RUNNING);
+        stepBtn.setDisable(isRunning);
+        stepDurationCombo.setDisable(isRunning);
+
         switch (uiState) {
             case RUNNING -> {
                 statusPillLabel.getStyleClass().add("sim-status-running");
@@ -751,8 +801,10 @@ public class MapView extends BorderPane {
                 String prevDst = destCombo.getValue();
                 sourceCombo.getItems().setAll(nodeIds);
                 destCombo.getItems().setAll(nodeIds);
-                if (nodeIds.contains(prevSrc)) sourceCombo.setValue(prevSrc);
-                if (nodeIds.contains(prevDst)) destCombo.setValue(prevDst);
+                if (nodeIds.contains(prevSrc))
+                    sourceCombo.setValue(prevSrc);
+                if (nodeIds.contains(prevDst))
+                    destCombo.setValue(prevDst);
             }
 
             canvas.setNetworkData(graph, model.getAmbulances(), model.getHospitals(), model.getActiveEmergencies());
@@ -809,7 +861,8 @@ public class MapView extends BorderPane {
             Label destLabel = new Label("🎯 " + amb.destinationName());
             destLabel.getStyleClass().add("fleet-card-sub");
 
-            Label etaLabel = new Label("⏱ " + (amb.isMoving() ? "ETA: " + amb.getFormattedEta() : "Stationary at " + amb.sourceNodeId()));
+            Label etaLabel = new Label(
+                    "⏱ " + (amb.isMoving() ? "ETA: " + amb.getFormattedEta() : "Stationary at " + amb.sourceNodeId()));
             etaLabel.setStyle("-fx-font-size: 10.5px; -fx-text-fill: #38bdf8;");
 
             // Progress bar

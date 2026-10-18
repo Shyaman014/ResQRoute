@@ -42,9 +42,25 @@ public class ResQRouteApp extends Application {
             scene.getStylesheets().add(cssResource.toExternalForm());
         }
 
+        // Global keyboard navigation shortcuts (Alt+1 through Alt+7, Ctrl+1 through Ctrl+7)
+        scene.addEventFilter(javafx.scene.input.KeyEvent.KEY_PRESSED, event -> {
+            if (event.isAltDown() || event.isControlDown()) {
+                switch (event.getCode()) {
+                    case DIGIT1 -> navigationController.navigateTo(com.resqroute.ui.model.NavSection.DASHBOARD);
+                    case DIGIT2 -> navigationController.navigateTo(com.resqroute.ui.model.NavSection.MAP);
+                    case DIGIT3 -> navigationController.navigateTo(com.resqroute.ui.model.NavSection.EMERGENCIES);
+                    case DIGIT4 -> navigationController.navigateTo(com.resqroute.ui.model.NavSection.AMBULANCES);
+                    case DIGIT5 -> navigationController.navigateTo(com.resqroute.ui.model.NavSection.HOSPITALS);
+                    case DIGIT6 -> navigationController.navigateTo(com.resqroute.ui.model.NavSection.SIMULATION);
+                    case DIGIT7 -> navigationController.navigateTo(com.resqroute.ui.model.NavSection.SETTINGS);
+                    default -> {}
+                }
+            }
+        });
+
         primaryStage.setTitle("ResQRoute — Emergency Ambulance Dispatch & City Simulator");
-        primaryStage.setMinWidth(1080);
-        primaryStage.setMinHeight(720);
+        primaryStage.setMinWidth(1120);
+        primaryStage.setMinHeight(750);
         primaryStage.setScene(scene);
 
         // Safe cleanup on window close

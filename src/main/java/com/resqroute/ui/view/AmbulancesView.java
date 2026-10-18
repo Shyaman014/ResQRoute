@@ -6,6 +6,7 @@ import com.resqroute.model.AmbulanceStatus;
 import com.resqroute.ui.component.EmptyStateView;
 import com.resqroute.ui.component.SectionHeader;
 import com.resqroute.ui.component.StatusBadge;
+import com.resqroute.ui.component.UiDialogs;
 import com.resqroute.ui.controller.SimulationPresentationModel;
 import javafx.beans.property.SimpleStringProperty;
 import javafx.geometry.Insets;
@@ -21,12 +22,13 @@ import java.util.stream.Collectors;
 
 /**
  * Ambulance fleet management view detailing unit statuses, current locations, medical capabilities,
- * and active emergency mission assignments.
+ * and active emergency mission assignments with search filtering and accessible detail modals.
  */
 public class AmbulancesView extends VBox {
 
     private final SimulationPresentationModel model;
     private final TableView<Ambulance> table;
+    private final TextField searchField;
     private final ToggleGroup filterGroup = new ToggleGroup();
     private Predicate<Ambulance> activeFilter = a -> true;
 
@@ -45,16 +47,35 @@ public class AmbulancesView extends VBox {
         );
         getChildren().add(header);
 
-        // 2. Filter Bar
-        HBox filterBar = new HBox(8);
+        // 2. Search & Filter Bar
+        HBox filterBar = new HBox(10);
         filterBar.setAlignment(Pos.CENTER_LEFT);
 
-        filterBar.getChildren().addAll(
-                createFilterButton("All Units", a -> true, true),
-                createFilterButton("Available Only", Ambulance::isAvailable, false),
-                createFilterButton("Assigned", a -> a.getStatus() == AmbulanceStatus.ASSIGNED || a.getStatus() == AmbulanceStatus.EN_ROUTE, false),
-                createFilterButton("Transporting", a -> a.getStatus() == AmbulanceStatus.TRANSPORTING, false)
+        searchField = new TextField();
+        searchField.setPromptText("🔍 Search Unit ID, Location, or Capabilities...");
+        searchField.setPrefWidth(280);
+        searchField.getStyleClass().add("search-field");
+        searchField.setAccessibleText("Filter ambulances by keyword");
+        searchField.textProperty().addListener((obs, old, text) -> applyFilter());
+
+        Button clearSearchBtn = new Button("✕");
+        clearSearchBtn.getStyleClass().addAll("action-btn", "btn-secondary");
+        clearSearchBtn.setAccessibleText("Clear ambulance search field");
+        clearSearchBtn.setTooltip(new Tooltip("Clear filter text"));
+        clearSearchBtn.setOnAction(e -> searchField.clear());
+
+        HBox filterButtons = new HBox(6);
+        filterButtons.setAlignment(Pos.CENTER_LEFT);
+
+        filterButtons.getChildren().addAll(
+                createFilterButton("All Units", a -> true, true, "Display entire emergency response fleet"),
+                createFilterButton("Available Only", Ambulance::isAvailable, false, "Show vehicles ready for immediate dispatch"),
+                createFilterButton("Assigned", a -> a.getStatus() == AmbulanceStatus.ASSIGNED || a.getStatus() == AmbulanceStatus.EN_ROUTE, false, "Show units currently dispatched or en-route"),
+                createFilterButton("Transporting", a -> a.getStatus() == AmbulanceStatus.TRANSPORTING, false, "Show units conveying patients to hospitals")
         );
+
+        HBox.setHgrow(filterButtons, Priority.ALWAYS);
+        filterBar.getChildren().addAll(searchField, clearSearchBtn, filterButtons);
         getChildren().add(filterBar);
 
         // 3. TableView
@@ -67,11 +88,13 @@ public class AmbulancesView extends VBox {
         refresh();
     }
 
-    private ToggleButton createFilterButton(String label, Predicate<Ambulance> predicate, boolean selected) {
+    private ToggleButton createFilterButton(String label, Predicate<Ambulance> predicate, boolean selected, String tooltip) {
         ToggleButton btn = new ToggleButton(label);
         btn.setToggleGroup(filterGroup);
         btn.setSelected(selected);
         btn.getStyleClass().add("filter-toggle-btn");
+        btn.setAccessibleText("Filter: " + label);
+        btn.setTooltip(new Tooltip(tooltip));
         btn.setOnAction(e -> {
             if (btn.isSelected()) {
                 this.activeFilter = predicate;
@@ -87,6 +110,16 @@ public class AmbulancesView extends VBox {
         TableView<Ambulance> t = new TableView<>();
         t.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY);
         t.setPlaceholder(new EmptyStateView("🚑", "No Ambulances Found", "No vehicles registered in fleet or matching active filter."));
+
+        t.setRowFactory(tv -> {
+            TableRow<Ambulance> row = new TableRow<>();
+            row.setOnMouseClicked(event -> {
+                if (event.getClickCount() == 2 && !row.isEmpty()) {
+                    UiDialogs.showAmbulanceDetails(getScene().getWindow(), row.getItem());
+                }
+            });
+            return row;
+        });
 
         TableColumn<Ambulance, String> idCol = new TableColumn<>("Unit ID");
         idCol.setCellValueFactory(d -> new SimpleStringProperty(d.getValue().getId()));
@@ -130,8 +163,18 @@ public class AmbulancesView extends VBox {
     }
 
     private void applyFilter() {
+        String query = (searchField.getText() == null) ? "" : searchField.getText().trim().toLowerCase();
         List<Ambulance> all = model.getAmbulances();
-        List<Ambulance> filtered = all.stream().filter(activeFilter).toList();
+        List<Ambulance> filtered = all.stream()
+                .filter(activeFilter)
+                .filter(a -> {
+                    if (query.isEmpty()) return true;
+                    return a.getId().toLowerCase().contains(query)
+                            || a.getCurrentLocationNodeId().toLowerCase().contains(query)
+                            || a.getStatus().name().toLowerCase().contains(query)
+                            || (a.getCapabilities() != null && a.getCapabilities().stream().anyMatch(c -> c.name().toLowerCase().contains(query)));
+                })
+                .toList();
         table.getItems().setAll(filtered);
     }
 

@@ -6,6 +6,7 @@ import com.resqroute.ui.component.EmptyStateView;
 import com.resqroute.ui.component.SectionHeader;
 import com.resqroute.ui.component.StatCard;
 import com.resqroute.ui.component.StatusBadge;
+import com.resqroute.ui.component.UiDialogs;
 import com.resqroute.ui.controller.SimulationPresentationModel;
 import com.resqroute.ui.model.UiSimulationState;
 import javafx.beans.property.SimpleStringProperty;
@@ -58,19 +59,41 @@ public class DashboardView extends ScrollPane {
 
         initBtn = new Button("🚀 Init Metropolis");
         initBtn.getStyleClass().addAll("action-btn", "btn-primary");
+        initBtn.setAccessibleText("Initialize Default Metropolis Scenario");
+        initBtn.setAccessibleHelp("Resets and loads the standard 40-node metropolis road network and fleet");
+        initBtn.setTooltip(new Tooltip("Initialize Metropolis scenario with full fleet and hospital network"));
         initBtn.setOnAction(e -> model.initializeDefaultScenario());
 
         stepBtn = new Button("⏭ Step (+1m)");
         stepBtn.getStyleClass().addAll("action-btn", "btn-secondary");
+        stepBtn.setAccessibleText("Advance simulation step by one minute");
+        stepBtn.setAccessibleHelp("Steps discrete time forward by 60 seconds");
+        stepBtn.setTooltip(new Tooltip("Step simulation forward by +1 minute"));
         stepBtn.setOnAction(e -> model.step(Duration.ofMinutes(1)));
 
         playPauseBtn = new Button("▶ Play");
         playPauseBtn.getStyleClass().addAll("action-btn", "btn-success");
+        playPauseBtn.setAccessibleText("Toggle continuous simulation playback");
+        playPauseBtn.setAccessibleHelp("Starts or pauses periodic time advancement");
+        playPauseBtn.setTooltip(new Tooltip("Start or pause automatic simulation ticks (Space)"));
         playPauseBtn.setOnAction(e -> model.togglePlayPause());
 
         resetBtn = new Button("🔄 Reset");
         resetBtn.getStyleClass().addAll("action-btn", "btn-danger");
-        resetBtn.setOnAction(e -> model.reset());
+        resetBtn.setAccessibleText("Reset simulation scenario");
+        resetBtn.setAccessibleHelp("Clears all active emergencies and restores initial fleet readiness");
+        resetBtn.setTooltip(new Tooltip("Reset simulation and fleet back to scenario origin"));
+        resetBtn.setOnAction(e -> {
+            boolean confirmed = UiDialogs.confirm(
+                    getScene() != null ? getScene().getWindow() : null,
+                    "Confirm Simulation Reset",
+                    "Reset Simulation & Fleet Back to Origin?",
+                    "This action will reset the simulation clock, cancel in-progress transports, and restore all emergency vehicles to available status."
+            );
+            if (confirmed) {
+                model.reset();
+            }
+        });
 
         header.setActions(initBtn, stepBtn, playPauseBtn, resetBtn);
         contentBox.getChildren().add(header);
@@ -207,6 +230,16 @@ public class DashboardView extends ScrollPane {
         ambCol.setCellValueFactory(data -> new SimpleStringProperty(data.getValue().getAssignedAmbulanceId().orElse("—")));
         ambCol.setPrefWidth(100);
 
+        table.setRowFactory(tv -> {
+            TableRow<EmergencyCase> row = new TableRow<>();
+            row.setOnMouseClicked(event -> {
+                if (event.getClickCount() == 2 && !row.isEmpty()) {
+                    UiDialogs.showEmergencyCaseDetails(getScene().getWindow(), row.getItem());
+                }
+            });
+            return row;
+        });
+
         table.getColumns().addAll(idCol, typeCol, sevCol, locCol, statusCol, ambCol);
         return table;
     }
@@ -216,6 +249,16 @@ public class DashboardView extends ScrollPane {
         table.setPrefHeight(220);
         table.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY);
         table.setPlaceholder(new EmptyStateView("🚑", "No Ambulances Registered", "Initialize a city scenario to populate the fleet."));
+
+        table.setRowFactory(tv -> {
+            TableRow<Ambulance> row = new TableRow<>();
+            row.setOnMouseClicked(event -> {
+                if (event.getClickCount() == 2 && !row.isEmpty()) {
+                    UiDialogs.showAmbulanceDetails(getScene().getWindow(), row.getItem());
+                }
+            });
+            return row;
+        });
 
         TableColumn<Ambulance, String> idCol = new TableColumn<>("Unit ID");
         idCol.setCellValueFactory(data -> new SimpleStringProperty(data.getValue().getId()));
@@ -292,8 +335,12 @@ public class DashboardView extends ScrollPane {
     }
 
     public void refresh(SimulationPresentationModel model) {
+        boolean isRunning = model.getUiState() == UiSimulationState.RUNNING;
+        stepBtn.setDisable(isRunning);
+        initBtn.setDisable(isRunning);
+
         // 1. Update Play / Pause Button state
-        if (model.getUiState() == UiSimulationState.RUNNING) {
+        if (isRunning) {
             playPauseBtn.setText("⏸ Pause");
             playPauseBtn.getStyleClass().removeAll("btn-success");
             if (!playPauseBtn.getStyleClass().contains("btn-warning")) {

@@ -95,20 +95,29 @@ class UiComponentsTest {
 
         StatusBadge badge1 = StatusBadge.ofEmergencyStatus(EmergencyStatus.REPORTED);
         assertTrue(badge1.getStyleClass().contains("badge-warning"));
+        assertNotNull(badge1.getAccessibleText());
+        assertTrue(badge1.getText().contains("REPORTED"));
 
         StatusBadge badge2 = StatusBadge.ofEmergencyStatus(EmergencyStatus.COMPLETED);
         assertTrue(badge2.getStyleClass().contains("badge-success"));
+        assertTrue(badge2.getText().contains("✓"));
 
         StatusBadge badge3 = StatusBadge.ofSeverity(EmergencySeverity.CRITICAL);
         assertTrue(badge3.getStyleClass().contains("badge-danger"));
+        assertTrue(badge3.getText().contains("CRITICAL"));
+        assertNotNull(badge3.getAccessibleText());
+        assertTrue(badge3.getAccessibleText().contains("CRITICAL"));
 
         StatusBadge badge4 = StatusBadge.ofAmbulanceStatus(AmbulanceStatus.AVAILABLE);
         assertTrue(badge4.getStyleClass().contains("badge-success"));
+        assertTrue(badge4.getText().contains("AVAILABLE"));
 
         StatusBadge badge5 = StatusBadge.ofHospitalStatus(HospitalStatus.OPEN);
         assertTrue(badge5.getStyleClass().contains("badge-success"));
+        assertTrue(badge5.getText().contains("OPEN"));
 
         StatusBadge badge6 = StatusBadge.ofHospitalStatus(HospitalStatus.CLOSED);
         assertTrue(badge6.getStyleClass().contains("badge-danger"));
+        assertTrue(badge6.getText().contains("CLOSED"));
     }
 }

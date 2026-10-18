@@ -627,3 +627,132 @@
     -fx-border-radius: 4px;
 }
 
+/* --------------------------------------------------------------------------
+   Accessibility & Focus Rings
+   -------------------------------------------------------------------------- */
+.button:focused, .toggle-button:focused, .combo-box:focused, .text-field:focused {
+    -fx-border-color: #38bdf8;
+    -fx-border-width: 2px;
+    -fx-border-radius: 6px;
+    -fx-effect: dropshadow(gaussian, rgba(56, 189, 248, 0.45), 6, 0, 0, 0);
+}
+
+.table-view:focused {
+    -fx-border-color: #38bdf8;
+    -fx-border-width: 1.5px;
+}
+
+.button:disabled, .toggle-button:disabled, .combo-box:disabled {
+    -fx-opacity: 0.45;
+    -fx-cursor: default;
+}
+
+/* --------------------------------------------------------------------------
+   Custom Accessible Dialog Styling
+   -------------------------------------------------------------------------- */
+.custom-dialog-pane {
+    -fx-background-color: #0f172a;
+    -fx-border-color: #334155;
+    -fx-border-width: 1px;
+    -fx-padding: 10px;
+}
+
+.custom-dialog-pane .header-panel {
+    -fx-background-color: #1e293b;
+    -fx-padding: 14px 18px;
+    -fx-border-color: #334155;
+    -fx-border-width: 0 0 1 0;
+}
+
+.custom-dialog-pane:header .header-panel .label {
+    -fx-text-fill: #f8fafc;
+    -fx-font-weight: bold;
+    -fx-font-size: 15px;
+}
+
+.custom-dialog-pane .content {
+    -fx-background-color: #0f172a;
+    -fx-padding: 16px;
+}
+
+.custom-dialog-pane .content.label {
+    -fx-text-fill: #cbd5e1;
+    -fx-font-size: 13px;
+    -fx-line-spacing: 3px;
+}
+
+.custom-dialog-pane .button-bar {
+    -fx-background-color: #0f172a;
+    -fx-padding: 12px 16px;
+    -fx-border-color: #334155;
+    -fx-border-width: 1 0 0 0;
+}
+
+.custom-dialog-pane .button-bar .button {
+    -fx-background-color: #2563eb;
+    -fx-text-fill: #ffffff;
+    -fx-font-weight: bold;
+    -fx-font-size: 12px;
+    -fx-padding: 8 18;
+    -fx-background-radius: 6px;
+    -fx-cursor: hand;
+}
+
+.custom-dialog-pane .button-bar .button:hover {
+    -fx-background-color: #1d4ed8;
+}
+
+.custom-dialog-pane .button-bar .button:cancel {
+    -fx-background-color: #334155;
+    -fx-text-fill: #f1f5f9;
+}
+
+.custom-dialog-pane .button-bar .button:cancel:hover {
+    -fx-background-color: #475569;
+}
+
+/* --------------------------------------------------------------------------
+   Sleek Custom ScrollBars
+   -------------------------------------------------------------------------- */
+.scroll-bar:vertical, .scroll-bar:horizontal {
+    -fx-background-color: transparent;
+    -fx-padding: 2;
+}
+
+.scroll-bar:vertical .track, .scroll-bar:horizontal .track {
+    -fx-background-color: rgba(15, 23, 42, 0.4);
+    -fx-background-radius: 4px;
+}
+
+.scroll-bar:vertical .thumb, .scroll-bar:horizontal .thumb {
+    -fx-background-color: #334155;
+    -fx-background-radius: 4px;
+}
+
+.scroll-bar:vertical .thumb:hover, .scroll-bar:horizontal .thumb:hover {
+    -fx-background-color: #475569;
+}
+
+.scroll-bar:vertical .increment-button, .scroll-bar:vertical .decrement-button,
+.scroll-bar:horizontal .increment-button, .scroll-bar:horizontal .decrement-button {
+    -fx-background-color: transparent;
+    -fx-padding: 0;
+}
+
+/* --------------------------------------------------------------------------
+   Tooltips
+   -------------------------------------------------------------------------- */
+.tooltip {
+    -fx-background-color: #0f172a;
+    -fx-text-fill: #f8fafc;
+    -fx-font-size: 11.5px;
+    -fx-font-weight: 500;
+    -fx-padding: 6 10;
+    -fx-background-radius: 6px;
+    -fx-border-radius: 6px;
+    -fx-border-color: #38bdf8;
+    -fx-border-width: 1px;
+    -fx-effect: dropshadow(gaussian, rgba(0, 0, 0, 0.5), 8, 0, 0, 2);
+}
+
+

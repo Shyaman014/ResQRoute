@@ -7,6 +7,7 @@ import com.resqroute.model.EmergencyType;
 import com.resqroute.ui.component.EmptyStateView;
 import com.resqroute.ui.component.SectionHeader;
 import com.resqroute.ui.component.StatusBadge;
+import com.resqroute.ui.component.UiDialogs;
 import com.resqroute.ui.controller.SimulationPresentationModel;
 import javafx.beans.property.SimpleStringProperty;
 import javafx.geometry.Insets;
@@ -48,29 +49,36 @@ public class EmergenciesView extends VBox {
         getChildren().add(header);
 
         // 2. Filter & Search Bar
-        HBox filterBar = new HBox(12);
+        HBox filterBar = new HBox(10);
         filterBar.setAlignment(Pos.CENTER_LEFT);
 
         searchField = new TextField();
         searchField.setPromptText("🔍 Search by Case ID, Node, or Type...");
         searchField.setPrefWidth(260);
         searchField.getStyleClass().add("search-field");
+        searchField.setAccessibleText("Filter emergency cases by keyword");
         searchField.textProperty().addListener((obs, old, text) -> applyFilter());
+
+        Button clearSearchBtn = new Button("✕");
+        clearSearchBtn.getStyleClass().addAll("action-btn", "btn-secondary");
+        clearSearchBtn.setAccessibleText("Clear emergency search field");
+        clearSearchBtn.setTooltip(new Tooltip("Clear filter text"));
+        clearSearchBtn.setOnAction(e -> searchField.clear());
 
         HBox filterButtons = new HBox(6);
         filterButtons.setAlignment(Pos.CENTER_LEFT);
 
         filterButtons.getChildren().addAll(
-                createFilterButton("All Cases", c -> true, true),
-                createFilterButton("Active Only", EmergencyCase::isActive, false),
-                createFilterButton("Waiting Dispatch", c -> c.getStatus() == EmergencyStatus.WAITING_FOR_DISPATCH, false),
-                createFilterButton("In Transit", c -> c.getStatus() == EmergencyStatus.AMBULANCE_EN_ROUTE || c.getStatus() == EmergencyStatus.TRANSPORTING, false),
-                createFilterButton("Completed", EmergencyCase::isCompleted, false),
-                createFilterButton("Cancelled", EmergencyCase::isCancelled, false)
+                createFilterButton("All Cases", c -> true, true, "Display all active and historical incidents"),
+                createFilterButton("Active Only", EmergencyCase::isActive, false, "Show incidents currently awaiting or receiving care"),
+                createFilterButton("Waiting Dispatch", c -> c.getStatus() == EmergencyStatus.WAITING_FOR_DISPATCH, false, "Show queued incidents awaiting ambulance dispatch"),
+                createFilterButton("In Transit", c -> c.getStatus() == EmergencyStatus.AMBULANCE_EN_ROUTE || c.getStatus() == EmergencyStatus.TRANSPORTING, false, "Show incidents with ambulances en-route or transporting"),
+                createFilterButton("Completed", EmergencyCase::isCompleted, false, "Show resolved emergency incidents"),
+                createFilterButton("Cancelled", EmergencyCase::isCancelled, false, "Show aborted or cancelled incidents")
         );
 
         HBox.setHgrow(filterButtons, Priority.ALWAYS);
-        filterBar.getChildren().addAll(searchField, filterButtons);
+        filterBar.getChildren().addAll(searchField, clearSearchBtn, filterButtons);
         getChildren().add(filterBar);
 
         // 3. TableView
@@ -83,11 +91,13 @@ public class EmergenciesView extends VBox {
         refresh();
     }
 
-    private ToggleButton createFilterButton(String label, Predicate<EmergencyCase> predicate, boolean selected) {
+    private ToggleButton createFilterButton(String label, Predicate<EmergencyCase> predicate, boolean selected, String tooltipText) {
         ToggleButton btn = new ToggleButton(label);
         btn.setToggleGroup(filterGroup);
         btn.setSelected(selected);
         btn.getStyleClass().add("filter-toggle-btn");
+        btn.setAccessibleText("Filter: " + label);
+        btn.setTooltip(new Tooltip(tooltipText));
         btn.setOnAction(e -> {
             if (btn.isSelected()) {
                 this.activeFilter = predicate;
@@ -155,6 +165,16 @@ public class EmergenciesView extends VBox {
         TableColumn<EmergencyCase, String> descCol = new TableColumn<>("Description");
         descCol.setCellValueFactory(d -> new SimpleStringProperty(d.getValue().getDescription()));
         descCol.setPrefWidth(220);
+
+        t.setRowFactory(tv -> {
+            TableRow<EmergencyCase> row = new TableRow<>();
+            row.setOnMouseClicked(event -> {
+                if (event.getClickCount() == 2 && !row.isEmpty()) {
+                    UiDialogs.showEmergencyCaseDetails(getScene().getWindow(), row.getItem());
+                }
+            });
+            return row;
+        });
 
         t.getColumns().addAll(idCol, typeCol, sevCol, nodeCol, statusCol, ambCol, hospCol, descCol);
         return t;

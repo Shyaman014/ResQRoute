@@ -29,3 +29,11 @@ replay_pid*
 # OS files
 .DS_Store
 Thumbs.db
+
+# Database local storage
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+data/
+

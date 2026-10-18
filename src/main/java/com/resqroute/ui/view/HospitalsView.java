@@ -7,6 +7,7 @@ import com.resqroute.model.HospitalStatus;
 import com.resqroute.ui.component.EmptyStateView;
 import com.resqroute.ui.component.SectionHeader;
 import com.resqroute.ui.component.StatusBadge;
+import com.resqroute.ui.component.UiDialogs;
 import com.resqroute.ui.controller.SimulationPresentationModel;
 import javafx.beans.property.SimpleStringProperty;
 import javafx.geometry.Insets;
@@ -21,12 +22,13 @@ import java.util.stream.Collectors;
 
 /**
  * Hospital management view tracking emergency medical facilities, live bed capacity utilization,
- * and supported critical trauma/cardiac capabilities.
+ * and supported critical trauma/cardiac capabilities with search filtering and accessible detail modals.
  */
 public class HospitalsView extends VBox {
 
     private final SimulationPresentationModel model;
     private final TableView<Hospital> table;
+    private final TextField searchField;
 
     public HospitalsView(SimulationPresentationModel model) {
         this.model = Objects.requireNonNull(model, "SimulationPresentationModel must not be null");
@@ -43,7 +45,27 @@ public class HospitalsView extends VBox {
         );
         getChildren().add(header);
 
-        // 2. TableView
+        // 2. Search Toolbar
+        HBox searchBar = new HBox(10);
+        searchBar.setAlignment(Pos.CENTER_LEFT);
+
+        searchField = new TextField();
+        searchField.setPromptText("🔍 Search by Facility Name, Location Node, or Capability...");
+        searchField.setPrefWidth(320);
+        searchField.getStyleClass().add("search-field");
+        searchField.setAccessibleText("Filter hospitals by facility name or location");
+        searchField.textProperty().addListener((obs, old, text) -> applyFilter());
+
+        Button clearBtn = new Button("✕");
+        clearBtn.getStyleClass().addAll("action-btn", "btn-secondary");
+        clearBtn.setAccessibleText("Clear hospital search query");
+        clearBtn.setTooltip(new Tooltip("Clear filter text"));
+        clearBtn.setOnAction(e -> searchField.clear());
+
+        searchBar.getChildren().addAll(searchField, clearBtn);
+        getChildren().add(searchBar);
+
+        // 3. TableView
         table = createTable();
         VBox.setVgrow(table, Priority.ALWAYS);
         getChildren().add(table);
@@ -57,6 +79,16 @@ public class HospitalsView extends VBox {
         TableView<Hospital> t = new TableView<>();
         t.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY);
         t.setPlaceholder(new EmptyStateView("🏥", "No Hospitals Registered", "Initialize a city scenario to view regional healthcare network."));
+
+        t.setRowFactory(tv -> {
+            TableRow<Hospital> row = new TableRow<>();
+            row.setOnMouseClicked(event -> {
+                if (event.getClickCount() == 2 && !row.isEmpty()) {
+                    UiDialogs.showHospitalDetails(getScene().getWindow(), row.getItem());
+                }
+            });
+            return row;
+        });
 
         TableColumn<Hospital, String> idCol = new TableColumn<>("ID");
         idCol.setCellValueFactory(d -> new SimpleStringProperty(d.getValue().getId()));
@@ -135,7 +167,23 @@ public class HospitalsView extends VBox {
         return t;
     }
 
+    private void applyFilter() {
+        String query = (searchField.getText() == null) ? "" : searchField.getText().trim().toLowerCase();
+        List<Hospital> all = model.getHospitals();
+        List<Hospital> filtered = all.stream()
+                .filter(h -> {
+                    if (query.isEmpty()) return true;
+                    return h.getId().toLowerCase().contains(query)
+                            || h.getName().toLowerCase().contains(query)
+                            || h.getLocationNodeId().toLowerCase().contains(query)
+                            || h.getStatus().name().toLowerCase().contains(query)
+                            || (h.getCapabilities() != null && h.getCapabilities().stream().anyMatch(c -> c.name().toLowerCase().contains(query)));
+                })
+                .toList();
+        table.getItems().setAll(filtered);
+    }
+
     public void refresh() {
-        table.getItems().setAll(model.getHospitals());
+        applyFilter();
     }
 }
