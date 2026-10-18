@@ -50,6 +50,7 @@ public class StatusBadge extends Label {
             case EN_ROUTE -> "badge-info";
             case ON_SCENE -> "badge-primary";
             case TRANSPORTING -> "badge-warning";
+            case RETURNING -> "badge-info";
             case OUT_OF_SERVICE -> "badge-danger";
         };
         return new StatusBadge(status.name().replace('_', ' '), badgeClass);

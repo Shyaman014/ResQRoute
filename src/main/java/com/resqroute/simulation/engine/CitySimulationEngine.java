@@ -13,9 +13,11 @@ import com.resqroute.service.*;
 import com.resqroute.simulation.event.SimulationEvent;
 import com.resqroute.simulation.event.SimulationEventType;
 import com.resqroute.simulation.metrics.SimulationMetrics;
+import com.resqroute.simulation.model.AmbulanceMovementTelemetry;
 import com.resqroute.simulation.model.CityScenario;
 import com.resqroute.simulation.model.ScheduledEmergencyEvent;
 import com.resqroute.simulation.model.ScheduledIncidentEvent;
+import com.resqroute.simulation.model.VehicleVisualState;
 
 import java.time.Clock;
 import java.time.Duration;
@@ -70,9 +72,10 @@ public class CitySimulationEngine {
     private final Set<String> completedCaseIds = new HashSet<>();
     private final Set<String> cancelledCaseIds = new HashSet<>();
 
-    private enum MissionPhase {
+    public enum MissionPhase {
         EN_ROUTE_TO_SCENE,
-        TRANSPORTING_TO_HOSPITAL
+        TRANSPORTING_TO_HOSPITAL,
+        RETURNING_TO_BASE
     }
 
     private static final class ActiveMission {
@@ -314,6 +317,39 @@ public class CitySimulationEngine {
 
         recordEvent(SimulationEventType.INCIDENT_RESOLVED, event.incidentId(),
                 String.format("Road reopened: %s -> %s", event.sourceNodeId(), event.destinationNodeId()), now);
+
+        rerouteBlockedMissions(now);
+    }
+
+    /**
+     * Reports a live road incident (e.g., manual closure), immediately updating the road graph
+     * and recalculating active mission routes traversing the closed segment.
+     */
+    public synchronized void reportIncident(RoadIncident incident) {
+        Objects.requireNonNull(incident, "RoadIncident must not be null");
+        activeIncidentIds.add(incident.getId());
+        incidentService.reportIncident(incident);
+        Instant now = simulationClock.instant();
+
+        recordEvent(SimulationEventType.INCIDENT_ACTIVATED, incident.getId(),
+                String.format("Road closed: %s -> %s (%s)", incident.getSourceNodeId(), incident.getDestinationNodeId(), incident.getDescription()), now);
+
+        rerouteAffectedMissions(incident.getSourceNodeId(), incident.getDestinationNodeId(), now);
+    }
+
+    /**
+     * Resolves an active road incident, reopening the roadway and unblocking any halted missions.
+     */
+    public synchronized void resolveIncident(String incidentId) {
+        Objects.requireNonNull(incidentId, "incidentId must not be null");
+        resolvedIncidentIds.add(incidentId);
+        incidentService.resolveIncident(incidentId);
+        Instant now = simulationClock.instant();
+
+        recordEvent(SimulationEventType.INCIDENT_RESOLVED, incidentId,
+                String.format("Road reopened for incident %s", incidentId), now);
+
+        rerouteBlockedMissions(now);
     }
 
     private void processDispatchQueue(Instant now) {
@@ -345,6 +381,11 @@ public class CitySimulationEngine {
         double deltaSeconds = timeDelta.toSeconds();
 
         for (ActiveMission mission : activeMissions.values()) {
+            if (mission.route == null || !mission.route.isReachable()) {
+                // Route is blocked / unreachable; ambulance halted safely until road reopens
+                continue;
+            }
+
             ambulanceActiveSeconds.merge(mission.ambulanceId, (long) deltaSeconds, Long::sum);
 
             List<Edge> edges = mission.route.getEdges();
@@ -445,12 +486,19 @@ public class CitySimulationEngine {
             // Release ambulance back to available
             fleetService.releaseAmbulance(mission.ambulanceId);
             mission.phase = null;
+
+        } else if (mission.phase == MissionPhase.RETURNING_TO_BASE) {
+            // Arrived back at home base station
+            fleetService.updateAmbulanceStatus(mission.ambulanceId, AmbulanceStatus.AVAILABLE);
+            recordEvent(SimulationEventType.AMBULANCE_WAYPOINT_REACHED, mission.ambulanceId,
+                    "Arrived back at base station " + fleetService.getAmbulanceOrThrow(mission.ambulanceId).getCurrentLocationNodeId(), now);
+            mission.phase = null;
         }
     }
 
     private void rerouteAffectedMissions(String closedSource, String closedDest, Instant now) {
         for (ActiveMission mission : activeMissions.values()) {
-            List<Edge> edges = mission.route.getEdges();
+            List<Edge> edges = (mission.route != null) ? mission.route.getEdges() : List.of();
             boolean affected = false;
             for (int i = mission.currentEdgeIndex; i < edges.size(); i++) {
                 Edge e = edges.get(i);
@@ -464,9 +512,14 @@ public class CitySimulationEngine {
             if (affected) {
                 // Recalculate route from current location
                 String currentLoc = fleetService.getAmbulanceOrThrow(mission.ambulanceId).getCurrentLocationNodeId();
-                String targetNode = (mission.phase == MissionPhase.EN_ROUTE_TO_SCENE)
-                        ? emergencyService.getCaseOrThrow(mission.caseId).getPickupLocationNodeId()
-                        : hospitalService.getHospitalOrThrow(mission.destinationHospitalId).getLocationNodeId();
+                String targetNode;
+                if (mission.phase == MissionPhase.EN_ROUTE_TO_SCENE) {
+                    targetNode = emergencyService.getCaseOrThrow(mission.caseId).getPickupLocationNodeId();
+                } else if (mission.phase == MissionPhase.TRANSPORTING_TO_HOSPITAL) {
+                    targetNode = hospitalService.getHospitalOrThrow(mission.destinationHospitalId).getLocationNodeId();
+                } else {
+                    targetNode = getBaseNodeForAmbulance(mission.ambulanceId);
+                }
 
                 RouteResult detour = reroutingService.getDijkstra().findFastestRoute(liveGraph, currentLoc, targetNode);
                 if (detour.isReachable()) {
@@ -477,9 +530,277 @@ public class CitySimulationEngine {
                     recordEvent(SimulationEventType.ROUTE_RECALCULATED, mission.ambulanceId,
                             String.format("Detoured around closure %s->%s (new ETA: %.1f min)",
                                     closedSource, closedDest, detour.getTotalTravelTimeMinutes()), now);
+                } else {
+                    // Try alternative hospital if in TRANSPORTING phase
+                    if (mission.phase == MissionPhase.TRANSPORTING_TO_HOSPITAL) {
+                        EmergencyCase currentCase = emergencyService.getCaseOrThrow(mission.caseId);
+                        HospitalSelectionResult altHosp = hospitalSelectionService.selectAndReserveHospital(currentCase, currentLoc);
+                        if (altHosp.isSuccess()) {
+                            Hospital chosen = altHosp.getSelectedHospital().orElseThrow().getHospital();
+                            mission.destinationHospitalId = chosen.getId();
+                            mission.route = altHosp.getSelectedHospital().orElseThrow().getRoute();
+                            mission.currentEdgeIndex = 0;
+                            mission.secondsOnCurrentEdge = 0.0;
+
+                            recordEvent(SimulationEventType.ROUTE_RECALCULATED, mission.ambulanceId,
+                                    String.format("Detoured to alternate hospital %s due to closure %s->%s",
+                                            chosen.getName(), closedSource, closedDest), now);
+                            continue;
+                        }
+                    }
+
+                    // Target completely unreachable; mark route unreachable and halt movement
+                    mission.route = RouteResult.unreachable(currentLoc, targetNode);
+                    mission.currentEdgeIndex = 0;
+                    mission.secondsOnCurrentEdge = 0.0;
+                    recordEvent(SimulationEventType.INCIDENT_ACTIVATED, mission.ambulanceId,
+                            String.format("Route blocked: Destination %s unreachable due to road closures", targetNode), now);
                 }
             }
         }
+    }
+
+    private void rerouteBlockedMissions(Instant now) {
+        for (ActiveMission mission : activeMissions.values()) {
+            if (mission.route == null || !mission.route.isReachable()) {
+                String currentLoc = fleetService.getAmbulanceOrThrow(mission.ambulanceId).getCurrentLocationNodeId();
+                String targetNode;
+                if (mission.phase == MissionPhase.EN_ROUTE_TO_SCENE) {
+                    targetNode = emergencyService.getCaseOrThrow(mission.caseId).getPickupLocationNodeId();
+                } else if (mission.phase == MissionPhase.TRANSPORTING_TO_HOSPITAL) {
+                    targetNode = hospitalService.getHospitalOrThrow(mission.destinationHospitalId).getLocationNodeId();
+                } else {
+                    targetNode = getBaseNodeForAmbulance(mission.ambulanceId);
+                }
+
+                RouteResult resumeRoute = reroutingService.getDijkstra().findFastestRoute(liveGraph, currentLoc, targetNode);
+                if (resumeRoute.isReachable()) {
+                    mission.route = resumeRoute;
+                    mission.currentEdgeIndex = 0;
+                    mission.secondsOnCurrentEdge = 0.0;
+                    recordEvent(SimulationEventType.ROUTE_RECALCULATED, mission.ambulanceId,
+                            String.format("Resumed transit to %s after road reopening (new ETA: %.1f min)",
+                                    targetNode, resumeRoute.getTotalTravelTimeMinutes()), now);
+                }
+            }
+        }
+    }
+
+    /**
+     * Orders an idle or available ambulance to return to its initial base station.
+     *
+     * @param ambulanceId ID of ambulance to dispatch back to base; must not be null.
+     * @return true if return route successfully calculated and initiated.
+     */
+    public synchronized boolean returnAmbulanceToBase(String ambulanceId) {
+        Ambulance amb = fleetService.getAmbulanceOrThrow(ambulanceId);
+        if (amb.getStatus() != AmbulanceStatus.AVAILABLE && amb.getStatus() != AmbulanceStatus.RETURNING) {
+            return false;
+        }
+
+        String baseNode = getBaseNodeForAmbulance(ambulanceId);
+        if (baseNode.equals(amb.getCurrentLocationNodeId())) {
+            fleetService.updateAmbulanceStatus(ambulanceId, AmbulanceStatus.AVAILABLE);
+            return true;
+        }
+
+        RouteResult route = reroutingService.getDijkstra().findFastestRoute(liveGraph, amb.getCurrentLocationNodeId(), baseNode);
+        if (route.isReachable()) {
+            fleetService.updateAmbulanceStatus(ambulanceId, AmbulanceStatus.RETURNING);
+            ActiveMission mission = new ActiveMission(ambulanceId, null, MissionPhase.RETURNING_TO_BASE, route);
+            activeMissions.put(ambulanceId, mission);
+
+            recordEvent(SimulationEventType.ROUTE_RECALCULATED, ambulanceId,
+                    String.format("Returning to base %s (ETA: %.1f min)", baseNode, route.getTotalTravelTimeMinutes()), simulationClock.instant());
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Returns full movement and position telemetry for all ambulances in the fleet.
+     *
+     * <p>Interpolates geospatial coordinates along active road corridors using current logical simulation time,
+     * calculates overall route completion progress, remaining ETA, and visual presentation state.</p>
+     */
+    public synchronized List<AmbulanceMovementTelemetry> getAmbulanceTelemetry() {
+        List<AmbulanceMovementTelemetry> list = new ArrayList<>();
+        for (Ambulance amb : fleetService.getAllAmbulances()) {
+            list.add(calculateTelemetryForAmbulance(amb));
+        }
+        return Collections.unmodifiableList(list);
+    }
+
+    private AmbulanceMovementTelemetry calculateTelemetryForAmbulance(Ambulance amb) {
+        ActiveMission mission = activeMissions.get(amb.getId());
+        String currentLocId = amb.getCurrentLocationNodeId();
+        Node currentLocNode = liveGraph.getNode(currentLocId).orElse(null);
+        GeoCoordinate defaultCoord = (currentLocNode != null)
+                ? currentLocNode.getCoordinates()
+                : new GeoCoordinate(40.7128, -74.0060);
+
+        if (mission == null) {
+            VehicleVisualState visualState = switch (amb.getStatus()) {
+                case AVAILABLE -> VehicleVisualState.AVAILABLE;
+                case ASSIGNED, EN_ROUTE -> VehicleVisualState.RESPONDING;
+                case ON_SCENE -> VehicleVisualState.AT_SCENE;
+                case TRANSPORTING -> VehicleVisualState.TRANSPORTING;
+                case RETURNING -> VehicleVisualState.RETURNING;
+                case OUT_OF_SERVICE -> VehicleVisualState.OUT_OF_SERVICE;
+            };
+            String destName = (amb.getStatus() == AmbulanceStatus.ON_SCENE)
+                    ? "On Scene (" + currentLocId + ")"
+                    : "Stationed at " + currentLocId;
+
+            return new AmbulanceMovementTelemetry(
+                    amb.getId(),
+                    amb.getStatus(),
+                    visualState,
+                    amb.getAssignedCaseId().orElse(null),
+                    currentLocId,
+                    currentLocId,
+                    currentLocId,
+                    destName,
+                    defaultCoord,
+                    1.0,
+                    0.0,
+                    null,
+                    0,
+                    0.0,
+                    false
+            );
+        }
+
+        // Active Mission
+        VehicleVisualState visualState;
+        String destName;
+        String destNodeId;
+
+        if (mission.phase == MissionPhase.EN_ROUTE_TO_SCENE) {
+            visualState = VehicleVisualState.RESPONDING;
+            destNodeId = emergencyService.getCase(mission.caseId)
+                    .map(EmergencyCase::getPickupLocationNodeId)
+                    .orElse(currentLocId);
+            destName = "Scene (" + destNodeId + ")";
+        } else if (mission.phase == MissionPhase.TRANSPORTING_TO_HOSPITAL) {
+            visualState = VehicleVisualState.TRANSPORTING;
+            Hospital h = (mission.destinationHospitalId != null) ? hospitalService.getHospital(mission.destinationHospitalId).orElse(null) : null;
+            destNodeId = (h != null) ? h.getLocationNodeId() : currentLocId;
+            destName = (h != null) ? h.getName() : "Hospital (" + destNodeId + ")";
+        } else {
+            visualState = VehicleVisualState.RETURNING;
+            destNodeId = getBaseNodeForAmbulance(amb.getId());
+            destName = "Base Station (" + destNodeId + ")";
+        }
+
+        RouteResult route = mission.route;
+        if (route == null || !route.isReachable() || route.getEdges().isEmpty()) {
+            boolean blocked = (route != null && !route.isReachable());
+            return new AmbulanceMovementTelemetry(
+                    amb.getId(),
+                    amb.getStatus(),
+                    visualState,
+                    mission.caseId,
+                    currentLocId,
+                    currentLocId,
+                    destNodeId,
+                    destName,
+                    defaultCoord,
+                    blocked ? 0.0 : 1.0,
+                    0.0,
+                    route,
+                    0,
+                    0.0,
+                    blocked
+            );
+        }
+
+        List<Edge> edges = route.getEdges();
+        int edgeIdx = Math.min(mission.currentEdgeIndex, edges.size() - 1);
+        Edge curEdge = edges.get(edgeIdx);
+
+        Node src = curEdge.getSource().orElse(currentLocNode);
+        Node dst = curEdge.getDestination();
+
+        double curEdgeTravelSec = Math.max(0.1, curEdge.getTravelTimeMinutes() * 60.0);
+        double edgeProgress = Math.min(1.0, Math.max(0.0, mission.secondsOnCurrentEdge / curEdgeTravelSec));
+
+        double lat1 = (src != null) ? src.getCoordinates().latitude() : defaultCoord.latitude();
+        double lon1 = (src != null) ? src.getCoordinates().longitude() : defaultCoord.longitude();
+        double lat2 = dst.getCoordinates().latitude();
+        double lon2 = dst.getCoordinates().longitude();
+
+        double interpLat = lat1 + edgeProgress * (lat2 - lat1);
+        double interpLon = lon1 + edgeProgress * (lon2 - lon1);
+        GeoCoordinate interpolatedCoord = new GeoCoordinate(interpLat, interpLon);
+
+        double heading = calculateHeading(lat1, lon1, lat2, lon2);
+
+        // Overall progress & remaining travel time
+        double totalRouteSec = 0.0;
+        double traversedSec = 0.0;
+        for (int i = 0; i < edges.size(); i++) {
+            double eSec = edges.get(i).getTravelTimeMinutes() * 60.0;
+            totalRouteSec += eSec;
+            if (i < edgeIdx) {
+                traversedSec += eSec;
+            }
+        }
+        traversedSec += Math.min(curEdgeTravelSec, mission.secondsOnCurrentEdge);
+
+        double overallProgress = (totalRouteSec > 0) ? Math.min(1.0, Math.max(0.0, traversedSec / totalRouteSec)) : 1.0;
+        double remainingSec = Math.max(0.0, totalRouteSec - traversedSec);
+
+        String finalDestNode = edges.get(edges.size() - 1).getDestination().getId();
+
+        return new AmbulanceMovementTelemetry(
+                amb.getId(),
+                amb.getStatus(),
+                visualState,
+                mission.caseId,
+                (src != null ? src.getId() : currentLocId),
+                dst.getId(),
+                finalDestNode,
+                destName,
+                interpolatedCoord,
+                overallProgress,
+                remainingSec,
+                route,
+                edgeIdx,
+                heading,
+                false
+        );
+    }
+
+    private String getBaseNodeForAmbulance(String ambId) {
+        return scenario.getInitialAmbulances().stream()
+                .filter(a -> a.getId().equals(ambId))
+                .findFirst()
+                .map(Ambulance::getCurrentLocationNodeId)
+                .orElseGet(() -> fleetService.getAmbulanceOrThrow(ambId).getCurrentLocationNodeId());
+    }
+
+    private static double calculateHeading(double lat1, double lon1, double lat2, double lon2) {
+        double dLat = lat2 - lat1;
+        double dLon = lon2 - lon1;
+        if (Math.abs(dLat) < 1e-9 && Math.abs(dLon) < 1e-9) {
+            return 0.0;
+        }
+        double deg = Math.toDegrees(Math.atan2(dLon, dLat));
+        return (deg < 0) ? deg + 360.0 : deg;
+    }
+
+    /**
+     * Returns the active reachable routes of all en-route, transporting, and returning ambulances.
+     */
+    public synchronized List<RouteResult> getActiveMissionRoutes() {
+        List<RouteResult> routes = new ArrayList<>();
+        for (ActiveMission mission : activeMissions.values()) {
+            if (mission.route != null && mission.route.isReachable() && !mission.route.getEdges().isEmpty()) {
+                routes.add(mission.route);
+            }
+        }
+        return Collections.unmodifiableList(routes);
     }
 
     private void recordEvent(SimulationEventType type, String entityId, String msg, Instant now) {
@@ -598,5 +919,13 @@ public class CitySimulationEngine {
 
     public HospitalSelectionService getHospitalSelectionService() {
         return hospitalSelectionService;
+    }
+
+    public RoadIncidentService getIncidentService() {
+        return incidentService;
+    }
+
+    public TrafficSimulationEngine getTrafficEngine() {
+        return trafficEngine;
     }
 }

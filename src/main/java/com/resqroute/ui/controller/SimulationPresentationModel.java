@@ -1,11 +1,20 @@
 package com.resqroute.ui.controller;
 
+import com.resqroute.algorithm.AStarRoutingAlgorithm;
+import com.resqroute.algorithm.DijkstraRoutingAlgorithm;
+import com.resqroute.algorithm.RoutingAlgorithm;
+import com.resqroute.algorithm.YenKShortestPathsAlgorithm;
+import com.resqroute.graph.RoadGraph;
 import com.resqroute.model.Ambulance;
 import com.resqroute.model.EmergencyCase;
 import com.resqroute.model.Hospital;
+import com.resqroute.model.RoadIncident;
+import com.resqroute.model.RouteResult;
+import com.resqroute.service.RoadIncidentService;
 import com.resqroute.simulation.engine.CitySimulationEngine;
 import com.resqroute.simulation.event.SimulationEvent;
 import com.resqroute.simulation.metrics.SimulationMetrics;
+import com.resqroute.simulation.model.AmbulanceMovementTelemetry;
 import com.resqroute.simulation.model.CityScenario;
 import com.resqroute.ui.model.UiMessage;
 import com.resqroute.ui.model.UiSimulationState;
@@ -14,6 +23,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
 /**
@@ -350,13 +360,34 @@ public class SimulationPresentationModel {
         return autoRunIntervalMs;
     }
 
-    public void setAutoRunIntervalMs(long autoRunIntervalMs) {
+    public synchronized void setAutoRunIntervalMs(long autoRunIntervalMs) {
         this.autoRunIntervalMs = Math.max(50, autoRunIntervalMs);
+        if (uiState == UiSimulationState.RUNNING && executorService != null && !executorService.isShutdown()) {
+            if (autoRunTask != null && !autoRunTask.isDone()) {
+                autoRunTask.cancel(false);
+            }
+            autoRunTask = executorService.scheduleWithFixedDelay(() -> {
+                try {
+                    synchronized (SimulationPresentationModel.this) {
+                        if (uiState != UiSimulationState.RUNNING) {
+                            return;
+                        }
+                        Duration stepSize = (currentScenario != null) ? currentScenario.getTimeStep() : defaultStepDuration;
+                        step(stepSize);
+                    }
+                } catch (Exception ex) {
+                    publishMessage(UiMessage.error("Background runner encountered error: " + ex.getMessage()));
+                    pause();
+                }
+            }, 0, this.autoRunIntervalMs, TimeUnit.MILLISECONDS);
+        }
     }
 
     // ==========================================
     // Event & Message Broadcasting
     // ==========================================
+
+    private final AtomicBoolean isUiUpdatePending = new AtomicBoolean(false);
 
     public void addStateChangeListener(Consumer<SimulationPresentationModel> listener) {
         stateListeners.add(Objects.requireNonNull(listener));
@@ -375,11 +406,17 @@ public class SimulationPresentationModel {
     }
 
     private void notifyStateChanged() {
-        uiThreadDispatcher.accept(() -> {
-            for (Consumer<SimulationPresentationModel> listener : stateListeners) {
-                listener.accept(this);
-            }
-        });
+        if (isUiUpdatePending.compareAndSet(false, true)) {
+            uiThreadDispatcher.accept(() -> {
+                try {
+                    for (Consumer<SimulationPresentationModel> listener : stateListeners) {
+                        listener.accept(this);
+                    }
+                } finally {
+                    isUiUpdatePending.set(false);
+                }
+            });
+        }
     }
 
     public void publishMessage(UiMessage message) {
@@ -389,6 +426,101 @@ public class SimulationPresentationModel {
                 listener.accept(message);
             }
         });
+    }
+
+    public Optional<RoadGraph> getLiveGraph() {
+        if (engine != null) return Optional.ofNullable(engine.getLiveGraph());
+        if (currentScenario != null) return Optional.ofNullable(currentScenario.getRoadGraph());
+        return Optional.empty();
+    }
+
+    public Optional<RoadIncidentService> getIncidentService() {
+        return (engine != null) ? Optional.ofNullable(engine.getIncidentService()) : Optional.empty();
+    }
+
+    public List<RoadIncident> getActiveIncidents() {
+        if (engine == null || engine.getIncidentService() == null) return List.of();
+        return List.copyOf(engine.getIncidentService().getActiveIncidents());
+    }
+
+    public synchronized void reportRoadClosure(String sourceId, String destId, String reason) {
+        if (engine == null) {
+            publishMessage(UiMessage.warning("Initialize a scenario before managing road incidents."));
+            return;
+        }
+        try {
+            String incidentId = "INC-MANUAL-" + (System.currentTimeMillis() % 10000);
+            RoadIncident incident = RoadIncident.roadClosure(incidentId, sourceId, destId, engine.getCurrentInstant());
+            engine.reportIncident(incident);
+            notifyStateChanged();
+            publishMessage(UiMessage.warning("Road closed: " + sourceId + " -> " + destId + " (" + reason + ")"));
+        } catch (Exception ex) {
+            publishMessage(UiMessage.error("Failed to close road: " + ex.getMessage()));
+        }
+    }
+
+    public synchronized void resolveRoadIncident(String incidentId) {
+        if (engine == null) return;
+        try {
+            engine.resolveIncident(incidentId);
+            notifyStateChanged();
+            publishMessage(UiMessage.success("Road incident " + incidentId + " resolved and road reopened."));
+        } catch (Exception ex) {
+            publishMessage(UiMessage.error("Failed to resolve incident: " + ex.getMessage()));
+        }
+    }
+
+    /**
+     * Retrieves full movement and interpolation telemetry for all ambulances in the simulation fleet.
+     */
+    public List<AmbulanceMovementTelemetry> getAmbulanceTelemetry() {
+        return (engine != null) ? engine.getAmbulanceTelemetry() : Collections.emptyList();
+    }
+
+    /**
+     * Retrieves all active routes currently being navigated by responding, transporting, or returning ambulances.
+     */
+    public List<RouteResult> getActiveMissionRoutes() {
+        return (engine != null) ? engine.getActiveMissionRoutes() : Collections.emptyList();
+    }
+
+    /**
+     * Dispatches an idle or available ambulance to navigate back to its assigned base station.
+     */
+    public synchronized boolean returnAmbulanceToBase(String ambulanceId) {
+        if (engine == null) {
+            publishMessage(UiMessage.warning("Initialize a scenario first."));
+            return false;
+        }
+        boolean ok = engine.returnAmbulanceToBase(ambulanceId);
+        if (ok) {
+            publishMessage(UiMessage.info("Ambulance " + ambulanceId + " dispatched to return to base."));
+            notifyStateChanged();
+        } else {
+            publishMessage(UiMessage.warning("Ambulance " + ambulanceId + " cannot return to base (busy, already at base, or unreachable)."));
+        }
+        return ok;
+    }
+
+    public RouteResult calculateRoute(String sourceId, String destId, String algorithmType) {
+        Optional<RoadGraph> graphOpt = getLiveGraph();
+        if (graphOpt.isEmpty()) {
+            throw new IllegalStateException("No road graph available");
+        }
+        RoadGraph graph = graphOpt.get();
+        RoutingAlgorithm algorithm = "A_STAR".equalsIgnoreCase(algorithmType)
+                ? new AStarRoutingAlgorithm()
+                : new DijkstraRoutingAlgorithm();
+        return algorithm.findFastestRoute(graph, sourceId, destId);
+    }
+
+    public List<RouteResult> calculateAlternativeRoutes(String sourceId, String destId, int k) {
+        Optional<RoadGraph> graphOpt = getLiveGraph();
+        if (graphOpt.isEmpty()) {
+            return List.of();
+        }
+        YenKShortestPathsAlgorithm yen = new YenKShortestPathsAlgorithm();
+        return yen.findKShortestPaths(graphOpt.get(), sourceId, destId, k);
     }
 
     public static String formatDuration(Duration duration) {

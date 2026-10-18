@@ -31,6 +31,11 @@ public enum AmbulanceStatus {
     TRANSPORTING,
 
     /**
+     * Returning to base station or designated hub after completing a mission.
+     */
+    RETURNING,
+
+    /**
      * Temporarily unavailable due to maintenance, shift change, or offline status.
      */
     OUT_OF_SERVICE;

@@ -478,3 +478,152 @@
     -fx-text-fill: #64748b;
     -fx-text-alignment: center;
 }
+
+/* --------------------------------------------------------------------------
+   Interactive Map & Road Network Canvas
+   -------------------------------------------------------------------------- */
+.map-view-root {
+    -fx-background-color: #0b0f19;
+}
+
+.map-canvas-container {
+    -fx-background-color: #090d16;
+    -fx-border-color: #1e293b;
+    -fx-border-width: 1px;
+    -fx-background-radius: 8px;
+    -fx-border-radius: 8px;
+    -fx-cursor: crosshair;
+}
+
+.map-legend-overlay {
+    -fx-background-color: rgba(15, 23, 42, 0.88);
+    -fx-background-radius: 8px;
+    -fx-border-radius: 8px;
+    -fx-border-color: #334155;
+    -fx-border-width: 1px;
+    -fx-effect: dropshadow(gaussian, rgba(0, 0, 0, 0.4), 8, 0, 0, 3);
+}
+
+.legend-title {
+    -fx-font-size: 11px;
+    -fx-font-weight: bold;
+    -fx-text-fill: #f8fafc;
+    -fx-padding: 0 0 4 0;
+    -fx-border-color: #334155;
+    -fx-border-width: 0 0 1 0;
+}
+
+.map-inspector-tabs .tab-header-area .tab-header-background {
+    -fx-background-color: #0f172a;
+}
+
+.map-inspector-tabs .tab {
+    -fx-background-color: #1e293b;
+    -fx-background-radius: 6px 6px 0 0;
+    -fx-padding: 4 10;
+}
+
+.map-inspector-tabs .tab:selected {
+    -fx-background-color: #2563eb;
+}
+
+.map-inspector-tabs .tab .tab-label {
+    -fx-text-fill: #f1f5f9;
+    -fx-font-weight: bold;
+    -fx-font-size: 11px;
+}
+
+.route-details-card {
+    -fx-background-color: #0f172a;
+    -fx-border-color: #334155;
+    -fx-border-radius: 6px;
+    -fx-background-radius: 6px;
+    -fx-border-width: 1px;
+}
+
+/* --------------------------------------------------------------------------
+   Live Simulation Status Pills & Telemetry Cards (Phase 19)
+   -------------------------------------------------------------------------- */
+.sim-status-pill {
+    -fx-padding: 4 10;
+    -fx-background-radius: 14px;
+    -fx-border-radius: 14px;
+    -fx-font-size: 11px;
+    -fx-font-weight: bold;
+    -fx-alignment: center;
+}
+
+.sim-status-running {
+    -fx-background-color: rgba(16, 185, 129, 0.25);
+    -fx-text-fill: #34d399;
+    -fx-border-color: #10b981;
+    -fx-border-width: 1.5px;
+    -fx-effect: dropshadow(gaussian, rgba(16, 185, 129, 0.4), 6, 0, 0, 0);
+}
+
+.sim-status-paused {
+    -fx-background-color: rgba(245, 158, 11, 0.25);
+    -fx-text-fill: #fbbf24;
+    -fx-border-color: #f59e0b;
+    -fx-border-width: 1.5px;
+}
+
+.sim-status-completed {
+    -fx-background-color: rgba(59, 130, 246, 0.25);
+    -fx-text-fill: #60a5fa;
+    -fx-border-color: #3b82f6;
+    -fx-border-width: 1.5px;
+}
+
+.sim-status-idle {
+    -fx-background-color: rgba(100, 116, 139, 0.2);
+    -fx-text-fill: #94a3b8;
+    -fx-border-color: #475569;
+    -fx-border-width: 1px;
+}
+
+.time-readout-badge {
+    -fx-background-color: #0f172a;
+    -fx-border-color: #334155;
+    -fx-border-radius: 6px;
+    -fx-background-radius: 6px;
+    -fx-padding: 4 10;
+    -fx-font-family: "Consolas", "Courier New", monospace;
+    -fx-font-size: 12px;
+    -fx-font-weight: bold;
+    -fx-text-fill: #38bdf8;
+}
+
+.fleet-card {
+    -fx-background-color: #0f172a;
+    -fx-border-color: #334155;
+    -fx-border-radius: 8px;
+    -fx-background-radius: 8px;
+    -fx-border-width: 1px;
+    -fx-padding: 10;
+}
+
+.fleet-card:hover {
+    -fx-border-color: #38bdf8;
+    -fx-background-color: #141f36;
+}
+
+.fleet-card-title {
+    -fx-font-size: 12px;
+    -fx-font-weight: bold;
+    -fx-text-fill: #f8fafc;
+}
+
+.fleet-card-sub {
+    -fx-font-size: 11px;
+    -fx-text-fill: #94a3b8;
+}
+
+.mini-action-btn {
+    -fx-font-size: 10px;
+    -fx-font-weight: bold;
+    -fx-padding: 3 8;
+    -fx-background-radius: 4px;
+    -fx-border-radius: 4px;
+}
+
