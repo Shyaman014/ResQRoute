@@ -52,4 +52,45 @@ public record UiMessage(MessageType type, String text, Instant timestamp) {
     public static UiMessage error(String text) {
         return new UiMessage(MessageType.ERROR, text, Instant.now());
     }
+
+    /**
+     * Sanitizes an exception into a safe, user-friendly UI error message.
+     * Prevents database internals, SQL snippets, or raw stack traces from leaking to the UI.
+     */
+    public static UiMessage fromException(Throwable ex) {
+        if (ex == null) {
+            return error("An unknown error occurred.");
+        }
+
+        Throwable cause = ex;
+        while (cause.getCause() != null && cause.getCause() != cause
+                && !(cause instanceof com.resqroute.exception.ResQRouteException)) {
+            cause = cause.getCause();
+        }
+
+        if (cause instanceof com.resqroute.exception.ResQRouteException domainEx) {
+            return error(domainEx.getMessage());
+        }
+
+        if (cause instanceof java.sql.SQLException sqlEx) {
+            String msg = sqlEx.getMessage();
+            String upper = (msg != null) ? msg.toUpperCase() : "";
+            if (upper.contains("FOREIGN KEY") || upper.contains("FOREIGNKEY")) {
+                return error("Database operation failed: Referenced network entity does not exist.");
+            }
+            if (upper.contains("UNIQUE")) {
+                return error("Database operation failed: A record with this identifier already exists.");
+            }
+            if (upper.contains("CHECK")) {
+                return error("Database operation failed: Data values violated domain validity constraints.");
+            }
+            return error("Database operation failed. Please check inputs and retry.");
+        }
+
+        String msg = cause.getMessage();
+        if (msg != null && !msg.isBlank() && !msg.contains("Exception") && !msg.contains("at ")) {
+            return error(msg);
+        }
+        return error("An unexpected system error occurred. Please verify your inputs and try again.");
+    }
 }

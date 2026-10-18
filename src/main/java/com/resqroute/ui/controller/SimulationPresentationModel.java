@@ -16,6 +16,7 @@ import com.resqroute.simulation.event.SimulationEvent;
 import com.resqroute.simulation.metrics.SimulationMetrics;
 import com.resqroute.simulation.model.AmbulanceMovementTelemetry;
 import com.resqroute.simulation.model.CityScenario;
+import com.resqroute.database.service.ResQRouteDatabaseService;
 import com.resqroute.ui.model.UiMessage;
 import com.resqroute.ui.model.UiSimulationState;
 
@@ -48,6 +49,8 @@ public class SimulationPresentationModel {
     private Duration defaultStepDuration = Duration.ofMinutes(1);
     private long autoRunIntervalMs = 800; // milliseconds between automatic simulation steps
     private long randomSeed = 42L;
+    private final java.util.concurrent.atomic.AtomicLong incidentCounter = new java.util.concurrent.atomic.AtomicLong(1);
+    private ResQRouteDatabaseService databaseService;
 
     // Background auto-runner
     private ScheduledExecutorService executorService;
@@ -57,7 +60,7 @@ public class SimulationPresentationModel {
      * Constructs a presentation model using synchronous immediate dispatch (ideal for headless unit testing).
      */
     public SimulationPresentationModel() {
-        this(Runnable::run);
+        this(Runnable::run, null);
     }
 
     /**
@@ -66,7 +69,23 @@ public class SimulationPresentationModel {
      * @param uiThreadDispatcher Dispatcher for executing callbacks on the UI thread; must not be null.
      */
     public SimulationPresentationModel(Consumer<Runnable> uiThreadDispatcher) {
+        this(uiThreadDispatcher, null);
+    }
+
+    /**
+     * Constructs a presentation model with a UI thread dispatcher and database persistence service.
+     */
+    public SimulationPresentationModel(Consumer<Runnable> uiThreadDispatcher, ResQRouteDatabaseService databaseService) {
         this.uiThreadDispatcher = Objects.requireNonNull(uiThreadDispatcher, "uiThreadDispatcher must not be null");
+        this.databaseService = databaseService;
+    }
+
+    public synchronized void setDatabaseService(ResQRouteDatabaseService databaseService) {
+        this.databaseService = databaseService;
+    }
+
+    public Optional<ResQRouteDatabaseService> getDatabaseService() {
+        return Optional.ofNullable(databaseService);
     }
 
     // ==========================================
@@ -83,7 +102,7 @@ public class SimulationPresentationModel {
             initializeScenario(scenario);
             publishMessage(UiMessage.success("Default Metropolis scenario initialized successfully with seed " + randomSeed));
         } catch (Exception ex) {
-            publishMessage(UiMessage.error("Failed to initialize default scenario: " + ex.getMessage()));
+            publishMessage(UiMessage.fromException(ex));
         }
     }
 
@@ -97,6 +116,11 @@ public class SimulationPresentationModel {
         this.currentScenario = scenario;
         this.engine = new CitySimulationEngine(scenario);
         this.uiState = UiSimulationState.IDLE;
+
+        if (databaseService != null) {
+            String scenarioId = "SCENARIO-" + scenario.getName().replaceAll("\\s+", "-").toUpperCase();
+            databaseService.runAsync(() -> databaseService.saveScenarioSnapshot(scenarioId, scenario));
+        }
 
         notifyStateChanged();
     }
@@ -133,17 +157,27 @@ public class SimulationPresentationModel {
         }
 
         try {
-            engine.step(timeDelta);
+            boolean wasPaused = engine.isPaused();
+            if (wasPaused) {
+                engine.resume();
+            }
+            try {
+                engine.step(timeDelta);
+            } finally {
+                if (wasPaused && uiState != UiSimulationState.RUNNING) {
+                    engine.pause();
+                }
+            }
             if (isCompleted()) {
                 stopAutoRunInternal();
                 this.uiState = UiSimulationState.COMPLETED;
                 publishMessage(UiMessage.success("Simulation completed scenario duration (" + formatDuration(engine.getElapsedSimulationTime()) + ")."));
-            } else if (uiState != UiSimulationState.RUNNING) {
+            } else if (uiState != UiSimulationState.RUNNING && uiState != UiSimulationState.PAUSED) {
                 this.uiState = UiSimulationState.IDLE;
             }
             notifyStateChanged();
         } catch (Exception ex) {
-            publishMessage(UiMessage.error("Simulation step error: " + ex.getMessage()));
+            publishMessage(UiMessage.fromException(ex));
         }
     }
 
@@ -192,7 +226,7 @@ public class SimulationPresentationModel {
                     step(stepSize);
                 }
             } catch (Exception ex) {
-                publishMessage(UiMessage.error("Background runner encountered error: " + ex.getMessage()));
+                publishMessage(UiMessage.fromException(ex));
                 pause();
             }
         }, 0, autoRunIntervalMs, TimeUnit.MILLISECONDS);
@@ -376,7 +410,7 @@ public class SimulationPresentationModel {
                         step(stepSize);
                     }
                 } catch (Exception ex) {
-                    publishMessage(UiMessage.error("Background runner encountered error: " + ex.getMessage()));
+                    publishMessage(UiMessage.fromException(ex));
                     pause();
                 }
             }, 0, this.autoRunIntervalMs, TimeUnit.MILLISECONDS);
@@ -449,13 +483,16 @@ public class SimulationPresentationModel {
             return;
         }
         try {
-            String incidentId = "INC-MANUAL-" + (System.currentTimeMillis() % 10000);
+            String incidentId = "INC-MANUAL-" + incidentCounter.incrementAndGet() + "-" + System.nanoTime();
             RoadIncident incident = RoadIncident.roadClosure(incidentId, sourceId, destId, engine.getCurrentInstant());
             engine.reportIncident(incident);
+            if (databaseService != null) {
+                databaseService.runAsync(() -> databaseService.recordRoadIncident(incident));
+            }
             notifyStateChanged();
             publishMessage(UiMessage.warning("Road closed: " + sourceId + " -> " + destId + " (" + reason + ")"));
         } catch (Exception ex) {
-            publishMessage(UiMessage.error("Failed to close road: " + ex.getMessage()));
+            publishMessage(UiMessage.fromException(ex));
         }
     }
 
@@ -463,10 +500,13 @@ public class SimulationPresentationModel {
         if (engine == null) return;
         try {
             engine.resolveIncident(incidentId);
+            if (databaseService != null) {
+                databaseService.runAsync(() -> databaseService.resolveRoadIncident(incidentId, "", "", engine.getCurrentInstant()));
+            }
             notifyStateChanged();
             publishMessage(UiMessage.success("Road incident " + incidentId + " resolved and road reopened."));
         } catch (Exception ex) {
-            publishMessage(UiMessage.error("Failed to resolve incident: " + ex.getMessage()));
+            publishMessage(UiMessage.fromException(ex));
         }
     }
 

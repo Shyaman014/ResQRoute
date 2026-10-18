@@ -551,7 +551,7 @@ public class MapView extends BorderPane {
             sb.append("Blocked Route: ").append(amb.isBlocked() ? "⚠️ YES (Detour Blocked)" : "NO (Clear)").append("\n");
 
             if (amb.caseId() != null) {
-                sb.append("Active Emergency Case: ").append(amb.caseId().get()).append("\n");
+                sb.append("Active Emergency Case: ").append(amb.caseId()).append("\n");
             }
 
             inspectorDetailsLabel.setText(sb.toString());

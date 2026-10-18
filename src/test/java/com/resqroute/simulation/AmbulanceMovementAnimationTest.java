@@ -15,7 +15,6 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
-import java.time.Instant;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -57,9 +56,10 @@ class AmbulanceMovementAnimationTest {
         assertEquals(UiSimulationState.PAUSED, presentationModel.getUiState());
         assertTrue(engine.isPaused());
 
-        // 3. Step while paused
+        // 3. Step while paused advances by exact step delta and preserves paused status
         presentationModel.step(Duration.ofSeconds(30));
         assertEquals(Duration.ofSeconds(30), engine.getElapsedSimulationTime());
+        assertEquals(UiSimulationState.PAUSED, presentationModel.getUiState());
 
         // 4. Resume
         presentationModel.resume();
@@ -119,7 +119,7 @@ class AmbulanceMovementAnimationTest {
             assertFalse(tel.isBlocked());
         }
 
-        // Advance to T = 1 min: CASE-01 triggers and AMB-01 is dispatched en route
+        // Advance to T = 1 min: CASE-01 triggers and ambulance is dispatched en route
         presentationModel.step(Duration.ofMinutes(1));
 
         List<AmbulanceMovementTelemetry> enRouteTelemetry = engine.getAmbulanceTelemetry();
@@ -135,7 +135,6 @@ class AmbulanceMovementAnimationTest {
         assertTrue(route.getTotalDistanceKm() > 0);
 
         // Advance small steps (15 seconds) and verify continuous interpolation
-        GeoCoordinate coordBefore = activeTel.currentCoordinates();
         double progressBefore = activeTel.routeProgress();
         double etaBefore = activeTel.estimatedSecondsRemaining();
 
@@ -149,9 +148,9 @@ class AmbulanceMovementAnimationTest {
         assertTrue(advancedTel.routeProgress() >= progressBefore, "Route progress must be monotonically non-decreasing");
         assertTrue(advancedTel.estimatedSecondsRemaining() <= etaBefore, "ETA must decrease as vehicle advances");
 
-        // Coordinates must be valid and within network bounding box
-        assertTrue(advancedTel.currentCoordinates().latitude() >= 40.70 && advancedTel.currentCoordinates().latitude() <= 40.80);
-        assertTrue(advancedTel.currentCoordinates().longitude() >= -74.05 && advancedTel.currentCoordinates().longitude() <= -73.95);
+        // Coordinates must be valid and within network bounding box (Bangalore metro: 12.9x, 77.5x-77.6x)
+        assertTrue(advancedTel.currentCoordinates().latitude() >= 12.90 && advancedTel.currentCoordinates().latitude() <= 13.05);
+        assertTrue(advancedTel.currentCoordinates().longitude() >= 77.50 && advancedTel.currentCoordinates().longitude() <= 77.70);
         assertTrue(advancedTel.headingDegrees() >= 0.0 && advancedTel.headingDegrees() <= 360.0);
         assertNotNull(advancedTel.getFormattedEta());
         assertNotNull(advancedTel.getFormattedCoordinates());
@@ -164,7 +163,7 @@ class AmbulanceMovementAnimationTest {
 
         // 1. Initial State: AVAILABLE
         AmbulanceMovementTelemetry t0 = engine.getAmbulanceTelemetry().stream()
-                .filter(t -> t.ambulanceId().equals("AMB-01"))
+                .filter(t -> t.ambulanceId().equals("AMB-NORTH"))
                 .findFirst()
                 .orElseThrow();
         assertEquals(VehicleVisualState.AVAILABLE, t0.visualState());
@@ -172,14 +171,14 @@ class AmbulanceMovementAnimationTest {
         // 2. T = 1 min: Dispatched -> RESPONDING
         presentationModel.step(Duration.ofMinutes(1));
         AmbulanceMovementTelemetry t1 = engine.getAmbulanceTelemetry().stream()
-                .filter(t -> t.ambulanceId().equals("AMB-01"))
+                .filter(t -> t.ambulanceId().equals("AMB-NORTH"))
                 .findFirst()
                 .orElseThrow();
         assertEquals(VehicleVisualState.RESPONDING, t1.visualState());
         assertTrue(t1.isMoving());
 
-        // 3. Step until patient is picked up on scene or admitted to hospital
-        presentationModel.step(Duration.ofMinutes(10));
+        // 3. Step until patient is picked up on scene (T = 16 min)
+        presentationModel.step(Duration.ofMinutes(15));
 
         // Event log verifies mission reached PATIENT_PICKED_UP and HOSPITAL_SELECTED
         assertTrue(engine.getSimulationEvents().stream()
@@ -187,6 +186,12 @@ class AmbulanceMovementAnimationTest {
 
         assertTrue(engine.getSimulationEvents().stream()
                 .anyMatch(e -> e.type() == SimulationEventType.HOSPITAL_SELECTED));
+
+        // 4. Advance through hospital transport to delivery and case closure (T = 26 min)
+        presentationModel.step(Duration.ofMinutes(10));
+
+        assertTrue(engine.getSimulationEvents().stream()
+                .anyMatch(e -> e.type() == SimulationEventType.CASE_COMPLETED && e.entityId().equals("CASE-01")));
     }
 
     @Test
@@ -194,7 +199,7 @@ class AmbulanceMovementAnimationTest {
     void testDynamicReroutingDuringMovement() {
         CitySimulationEngine engine = presentationModel.getEngine().orElseThrow();
 
-        // Dispatched at T = 1 min
+        // Dispatched at T = 1 min (AMB-NORTH en route from NORTH-STATION to CENTRAL-PLAZA)
         presentationModel.step(Duration.ofMinutes(1));
 
         AmbulanceMovementTelemetry amb = engine.getAmbulanceTelemetry().stream()
@@ -202,25 +207,17 @@ class AmbulanceMovementAnimationTest {
                 .findFirst()
                 .orElseThrow();
 
-        RouteResult initialRoute = amb.getActiveRoute().orElseThrow();
-        List<Edge> edges = initialRoute.getEdges();
-        assertTrue(edges.size() >= 2, "Route should have at least 2 edges for mid-transit detour testing");
-
-        // Close edge 1 on the route
-        Edge roadToClose = edges.get(1);
-        String srcClose = roadToClose.getSource().orElseThrow().getId();
-        String dstClose = roadToClose.getDestination().getId();
-
-        presentationModel.reportRoadClosure(srcClose, dstClose, "Emergency pipe burst");
+        // Close the direct road NORTH-STATION -> CENTRAL-PLAZA
+        presentationModel.reportRoadClosure("NORTH-STATION", "CENTRAL-PLAZA", "Emergency road closure");
 
         // Live graph reflects closed road
-        assertTrue(engine.getLiveGraph().isRoadClosed(srcClose, dstClose));
+        assertTrue(engine.getLiveGraph().isRoadClosed("NORTH-STATION", "CENTRAL-PLAZA"));
 
         // Rerouting event was recorded
         assertTrue(engine.getSimulationEvents().stream()
                 .anyMatch(e -> e.type() == SimulationEventType.ROUTE_RECALCULATED && e.entityId().equals(amb.ambulanceId())));
 
-        // Telemetry updated to detour route without the closed road
+        // Telemetry updated to detour route (detours via WEST-INDUSTRIAL)
         AmbulanceMovementTelemetry reroutedAmb = engine.getAmbulanceTelemetry().stream()
                 .filter(t -> t.ambulanceId().equals(amb.ambulanceId()))
                 .findFirst()
@@ -229,8 +226,8 @@ class AmbulanceMovementAnimationTest {
         assertTrue(reroutedAmb.getActiveRoute().isPresent());
         RouteResult newRoute = reroutedAmb.getActiveRoute().get();
         for (Edge e : newRoute.getEdges()) {
-            assertFalse(e.getSource().map(Node::getId).orElse("").equals(srcClose)
-                            && e.getDestination().getId().equals(dstClose),
+            assertFalse(e.getSource().map(Node::getId).orElse("").equals("NORTH-STATION")
+                            && e.getDestination().getId().equals("CENTRAL-PLAZA"),
                     "Rerouted detour must not traverse the closed road corridor");
         }
     }
@@ -251,7 +248,8 @@ class AmbulanceMovementAnimationTest {
         String targetDestination = amb.destinationNodeId();
 
         // Sever all incoming roads into destination
-        for (Edge inEdge : engine.getLiveGraph().getIncomingEdges(targetDestination)) {
+        List<Edge> inEdges = engine.getLiveGraph().getIncomingEdges(targetDestination);
+        for (Edge inEdge : inEdges) {
             String src = inEdge.getSource().orElseThrow().getId();
             presentationModel.reportRoadClosure(src, targetDestination, "Complete quarantine lockdown");
         }
@@ -312,19 +310,19 @@ class AmbulanceMovementAnimationTest {
     void testReturnAmbulanceToBaseStation() {
         CitySimulationEngine engine = presentationModel.getEngine().orElseThrow();
 
-        // AMB-01 is initially at NORTH-STATION
-        Ambulance amb01 = engine.getFleetService().getAmbulanceOrThrow("AMB-01");
-        assertEquals("NORTH-STATION", amb01.getCurrentLocationNodeId());
+        // AMB-NORTH is initially at NORTH-STATION
+        Ambulance ambNorth = engine.getFleetService().getAmbulanceOrThrow("AMB-NORTH");
+        assertEquals("NORTH-STATION", ambNorth.getCurrentLocationNodeId());
 
-        // Relocate ambulance to a hospital node
-        engine.getFleetService().updateLocation("AMB-01", "HOSP-APEX-NODE");
+        // Relocate ambulance to hospital node
+        engine.getFleetService().updateLocation("AMB-NORTH", "HOSP-APEX-NODE");
 
         // Dispatch return to base
-        boolean ok = presentationModel.returnAmbulanceToBase("AMB-01");
+        boolean ok = presentationModel.returnAmbulanceToBase("AMB-NORTH");
         assertTrue(ok, "Return to base dispatch should succeed");
 
         AmbulanceMovementTelemetry tel = engine.getAmbulanceTelemetry().stream()
-                .filter(t -> t.ambulanceId().equals("AMB-01"))
+                .filter(t -> t.ambulanceId().equals("AMB-NORTH"))
                 .findFirst()
                 .orElseThrow();
 
@@ -335,7 +333,7 @@ class AmbulanceMovementAnimationTest {
         // Step simulation until arrival back at base
         presentationModel.step(Duration.ofMinutes(10));
 
-        Ambulance returned = engine.getFleetService().getAmbulanceOrThrow("AMB-01");
+        Ambulance returned = engine.getFleetService().getAmbulanceOrThrow("AMB-NORTH");
         assertEquals("NORTH-STATION", returned.getCurrentLocationNodeId());
         assertEquals(AmbulanceStatus.AVAILABLE, returned.getStatus());
     }

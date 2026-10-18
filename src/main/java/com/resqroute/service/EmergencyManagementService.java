@@ -317,16 +317,16 @@ public class EmergencyManagementService {
             throw new IllegalStateException("Cannot assign ambulance to terminal case in status " + current.getStatus());
         }
 
-        // If an ambulance was previously assigned, release it first
+        // Allocate new ambulance in fleet service first
+        fleetService.assignAmbulanceToCase(ambulanceId, caseId);
+
+        // If an ambulance was previously assigned and successfully replaced, release previous
         if (current.hasAssignedAmbulance()) {
             String prevAmbId = current.getAssignedAmbulanceId().orElseThrow();
             if (!prevAmbId.equals(ambulanceId)) {
                 fleetService.releaseAmbulance(prevAmbId);
             }
         }
-
-        // Allocate ambulance in fleet service
-        fleetService.assignAmbulanceToCase(ambulanceId, caseId);
 
         // Update case with assigned ambulance
         EmergencyCase withAmb = current.withAssignedAmbulance(ambulanceId);

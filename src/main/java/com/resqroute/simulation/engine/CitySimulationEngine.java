@@ -399,28 +399,39 @@ public class CitySimulationEngine {
             }
 
             mission.secondsOnCurrentEdge += deltaSeconds;
-            Edge currentEdge = edges.get(mission.currentEdgeIndex);
 
-            // Fetch live travel time of the edge considering traffic congestion
-            double edgeTravelTimeSeconds = currentEdge.getTravelTimeMinutes() * 60.0;
-
-            if (mission.secondsOnCurrentEdge >= edgeTravelTimeSeconds) {
-                // Completed traversal of current edge: advance to next waypoint
-                mission.secondsOnCurrentEdge -= edgeTravelTimeSeconds;
-                mission.currentEdgeIndex++;
-
-                String reachedNodeId = currentEdge.getDestination().getId();
-                fleetService.updateLocation(mission.ambulanceId, reachedNodeId);
-
-                recordEvent(SimulationEventType.AMBULANCE_WAYPOINT_REACHED, mission.ambulanceId,
-                        "Arrived at waypoint " + reachedNodeId, now);
-
-                if (mission.currentEdgeIndex >= edges.size()) {
-                    // Reached end of current route
+            while (mission.route != null && mission.route.isReachable()) {
+                edges = mission.route.getEdges();
+                if (edges.isEmpty() || mission.currentEdgeIndex >= edges.size()) {
                     completeMissionPhase(mission, now);
                     if (mission.phase == null) {
                         finishedMissions.add(mission.ambulanceId);
                     }
+                    break;
+                }
+
+                Edge currentEdge = edges.get(mission.currentEdgeIndex);
+                double edgeTravelTimeSeconds = currentEdge.getTravelTimeMinutes() * 60.0;
+
+                if (mission.secondsOnCurrentEdge >= edgeTravelTimeSeconds) {
+                    mission.secondsOnCurrentEdge -= edgeTravelTimeSeconds;
+                    mission.currentEdgeIndex++;
+
+                    String reachedNodeId = currentEdge.getDestination().getId();
+                    fleetService.updateLocation(mission.ambulanceId, reachedNodeId);
+
+                    recordEvent(SimulationEventType.AMBULANCE_WAYPOINT_REACHED, mission.ambulanceId,
+                            "Arrived at waypoint " + reachedNodeId, now);
+
+                    if (mission.currentEdgeIndex >= edges.size()) {
+                        completeMissionPhase(mission, now);
+                        if (mission.phase == null) {
+                            finishedMissions.add(mission.ambulanceId);
+                            break;
+                        }
+                    }
+                } else {
+                    break;
                 }
             }
         }
@@ -502,8 +513,9 @@ public class CitySimulationEngine {
             boolean affected = false;
             for (int i = mission.currentEdgeIndex; i < edges.size(); i++) {
                 Edge e = edges.get(i);
-                if (e.getSource().map(Node::getId).orElse("").equals(closedSource)
-                        && e.getDestination().getId().equals(closedDest)) {
+                String s = e.getSource().map(Node::getId).orElse("");
+                String d = e.getDestination().getId();
+                if ((s.equals(closedSource) && d.equals(closedDest)) || !liveGraph.isRoadAvailable(s, d)) {
                     affected = true;
                     break;
                 }

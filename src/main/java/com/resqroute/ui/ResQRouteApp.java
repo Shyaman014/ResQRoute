@@ -22,6 +22,11 @@ public class ResQRouteApp extends Application {
 
     @Override
     public void start(Stage primaryStage) {
+        // Global uncaught exception handler to prevent unhandled exceptions from terminating UI
+        Thread.setDefaultUncaughtExceptionHandler((thread, throwable) -> {
+            com.resqroute.logging.AppLogger.error("Uncaught exception on thread " + thread.getName(), throwable);
+        });
+
         // UI thread safe presentation model
         presentationModel = new SimulationPresentationModel(Platform::runLater);
         NavigationController navigationController = new NavigationController();
