@@ -7,7 +7,7 @@ import java.util.*;
  * Domain model representing an emergency incident lifecycle in ResQRoute.
  *
  * <p>Encapsulates incident classification, triage severity, pickup waypoint, lifecycle status,
- * transit assignments, and chronological status history.
+ * transit assignments, clinical capability requirements, and chronological status history.
  * Designed according to privacy best practices: stores strictly operational dispatch metadata
  * with zero personally identifiable patient information (PII).</p>
  */
@@ -23,9 +23,10 @@ public final class EmergencyCase {
     private final String destinationHospitalId;
     private final String description;
     private final List<EmergencyStatusHistoryEntry> statusHistory;
+    private final Set<AmbulanceCapability> requiredCapabilities;
 
     /**
-     * Complete primary constructor.
+     * Complete primary constructor with explicit required capabilities.
      */
     public EmergencyCase(String id,
                          EmergencyType type,
@@ -36,7 +37,8 @@ public final class EmergencyCase {
                          String assignedAmbulanceId,
                          String destinationHospitalId,
                          String description,
-                         List<EmergencyStatusHistoryEntry> statusHistory) {
+                         List<EmergencyStatusHistoryEntry> statusHistory,
+                         Set<AmbulanceCapability> requiredCapabilities) {
         if (id == null || id.trim().isEmpty()) {
             throw new IllegalArgumentException("Emergency case ID must not be null or blank");
         }
@@ -66,6 +68,28 @@ public final class EmergencyCase {
         } else {
             this.statusHistory = List.copyOf(statusHistory);
         }
+
+        if (requiredCapabilities == null || requiredCapabilities.isEmpty()) {
+            this.requiredCapabilities = deriveDefaultCapabilities(this.type, this.severity);
+        } else {
+            this.requiredCapabilities = Collections.unmodifiableSet(EnumSet.copyOf(requiredCapabilities));
+        }
+    }
+
+    /**
+     * Primary constructor defaulting to derived required capabilities.
+     */
+    public EmergencyCase(String id,
+                         EmergencyType type,
+                         EmergencySeverity severity,
+                         String pickupLocationNodeId,
+                         Instant createdAt,
+                         EmergencyStatus status,
+                         String assignedAmbulanceId,
+                         String destinationHospitalId,
+                         String description,
+                         List<EmergencyStatusHistoryEntry> statusHistory) {
+        this(id, type, severity, pickupLocationNodeId, createdAt, status, assignedAmbulanceId, destinationHospitalId, description, statusHistory, null);
     }
 
     /**
@@ -77,7 +101,22 @@ public final class EmergencyCase {
                          String pickupLocationNodeId,
                          Instant createdAt,
                          String description) {
-        this(id, type, severity, pickupLocationNodeId, createdAt, EmergencyStatus.REPORTED, null, null, description, null);
+        this(id, type, severity, pickupLocationNodeId, createdAt, EmergencyStatus.REPORTED, null, null, description, null, null);
+    }
+
+    private static Set<AmbulanceCapability> deriveDefaultCapabilities(EmergencyType type, EmergencySeverity severity) {
+        EnumSet<AmbulanceCapability> set = EnumSet.of(AmbulanceCapability.BASIC_LIFE_SUPPORT);
+        if (type == EmergencyType.CARDIAC) {
+            set.add(AmbulanceCapability.ADVANCED_LIFE_SUPPORT);
+            set.add(AmbulanceCapability.CARDIAC_CARE);
+        } else if (type == EmergencyType.FIRE_RESCUE) {
+            set.add(AmbulanceCapability.HEAVY_RESCUE);
+        } else if (severity == EmergencySeverity.CRITICAL) {
+            set.add(AmbulanceCapability.ADVANCED_LIFE_SUPPORT);
+        } else if (severity == EmergencySeverity.HIGH && type == EmergencyType.TRAUMA) {
+            set.add(AmbulanceCapability.ADVANCED_LIFE_SUPPORT);
+        }
+        return Collections.unmodifiableSet(set);
     }
 
     public String getId() {
@@ -118,6 +157,10 @@ public final class EmergencyCase {
 
     public List<EmergencyStatusHistoryEntry> getStatusHistory() {
         return statusHistory;
+    }
+
+    public Set<AmbulanceCapability> getRequiredCapabilities() {
+        return requiredCapabilities;
     }
 
     public boolean isActive() {
@@ -164,7 +207,8 @@ public final class EmergencyCase {
                 this.assignedAmbulanceId,
                 this.destinationHospitalId,
                 this.description,
-                updatedHistory
+                updatedHistory,
+                this.requiredCapabilities
         );
     }
 
@@ -183,7 +227,8 @@ public final class EmergencyCase {
                 this.assignedAmbulanceId,
                 this.destinationHospitalId,
                 this.description,
-                this.statusHistory
+                this.statusHistory,
+                this.requiredCapabilities
         );
     }
 
@@ -204,7 +249,8 @@ public final class EmergencyCase {
                 ambulanceId.trim(),
                 this.destinationHospitalId,
                 this.description,
-                this.statusHistory
+                this.statusHistory,
+                this.requiredCapabilities
         );
     }
 
@@ -222,7 +268,8 @@ public final class EmergencyCase {
                 null,
                 this.destinationHospitalId,
                 this.description,
-                this.statusHistory
+                this.statusHistory,
+                this.requiredCapabilities
         );
     }
 
@@ -243,7 +290,27 @@ public final class EmergencyCase {
                 this.assignedAmbulanceId,
                 hospitalNodeId.trim(),
                 this.description,
-                this.statusHistory
+                this.statusHistory,
+                this.requiredCapabilities
+        );
+    }
+
+    /**
+     * Returns an updated copy with explicit required clinical capabilities.
+     */
+    public EmergencyCase withRequiredCapabilities(Set<AmbulanceCapability> newCapabilities) {
+        return new EmergencyCase(
+                this.id,
+                this.type,
+                this.severity,
+                this.pickupLocationNodeId,
+                this.createdAt,
+                this.status,
+                this.assignedAmbulanceId,
+                this.destinationHospitalId,
+                this.description,
+                this.statusHistory,
+                newCapabilities
         );
     }
 
@@ -262,6 +329,7 @@ public final class EmergencyCase {
         private String destinationHospitalId;
         private String description;
         private List<EmergencyStatusHistoryEntry> statusHistory;
+        private Set<AmbulanceCapability> requiredCapabilities;
 
         public Builder id(String id) {
             this.id = id;
@@ -313,12 +381,17 @@ public final class EmergencyCase {
             return this;
         }
 
+        public Builder requiredCapabilities(Set<AmbulanceCapability> requiredCapabilities) {
+            this.requiredCapabilities = requiredCapabilities;
+            return this;
+        }
+
         public EmergencyCase build() {
             if (createdAt == null) {
                 createdAt = Instant.now();
             }
             return new EmergencyCase(id, type, severity, pickupLocationNodeId, createdAt,
-                    status, assignedAmbulanceId, destinationHospitalId, description, statusHistory);
+                    status, assignedAmbulanceId, destinationHospitalId, description, statusHistory, requiredCapabilities);
         }
     }
 
@@ -336,9 +409,10 @@ public final class EmergencyCase {
 
     @Override
     public String toString() {
-        return String.format("EmergencyCase[id='%s', type=%s, severity=%s, pickup='%s', status=%s, amb='%s', hosp='%s']",
+        return String.format("EmergencyCase[id='%s', type=%s, severity=%s, pickup='%s', status=%s, amb='%s', hosp='%s', reqCaps=%s]",
                 id, type, severity, pickupLocationNodeId, status,
                 assignedAmbulanceId != null ? assignedAmbulanceId : "none",
-                destinationHospitalId != null ? destinationHospitalId : "none");
+                destinationHospitalId != null ? destinationHospitalId : "none",
+                requiredCapabilities);
     }
 }
