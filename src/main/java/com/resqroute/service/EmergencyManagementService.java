@@ -238,6 +238,21 @@ public class EmergencyManagementService {
     }
 
     /**
+     * Updates an emergency case's triage severity rating.
+     *
+     * @param caseId      Unique emergency case identifier.
+     * @param newSeverity The new severity rating; must not be null.
+     * @return The updated EmergencyCase instance.
+     */
+    public synchronized EmergencyCase updateCaseSeverity(String caseId, EmergencySeverity newSeverity) {
+        Objects.requireNonNull(newSeverity, "Severity must not be null");
+        EmergencyCase current = getCaseOrThrow(caseId);
+        EmergencyCase updated = current.withSeverity(newSeverity);
+        casesById.put(caseId, updated);
+        return updated;
+    }
+
+    /**
      * Updates an emergency case's lifecycle status through validated state transitions.
      *
      * @param caseId    Unique emergency case identifier.

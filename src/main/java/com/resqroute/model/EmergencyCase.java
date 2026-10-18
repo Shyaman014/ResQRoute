@@ -169,6 +169,25 @@ public final class EmergencyCase {
     }
 
     /**
+     * Returns an updated copy with a revised triage severity rating.
+     */
+    public EmergencyCase withSeverity(EmergencySeverity newSeverity) {
+        Objects.requireNonNull(newSeverity, "Emergency severity must not be null");
+        return new EmergencyCase(
+                this.id,
+                this.type,
+                newSeverity,
+                this.pickupLocationNodeId,
+                this.createdAt,
+                this.status,
+                this.assignedAmbulanceId,
+                this.destinationHospitalId,
+                this.description,
+                this.statusHistory
+        );
+    }
+
+    /**
      * Returns an updated copy with an assigned ambulance.
      */
     public EmergencyCase withAssignedAmbulance(String ambulanceId) {
