@@ -27,6 +27,7 @@ public class RouteOptimizationService {
     private final RouteComparisonService comparisonService;
     private final RoadIncidentService incidentService;
     private final AutomaticReroutingService reroutingService;
+    private final EmergencyManagementService emergencyService;
 
     /**
      * Constructs a RouteOptimizationService with custom road graph and routing strategy.
@@ -41,6 +42,7 @@ public class RouteOptimizationService {
         this.comparisonService = new RouteComparisonService();
         this.incidentService = new RoadIncidentService(roadGraph);
         this.reroutingService = new AutomaticReroutingService(roadGraph);
+        this.emergencyService = new EmergencyManagementService(roadGraph);
     }
 
     /**
@@ -162,6 +164,10 @@ public class RouteOptimizationService {
 
     public AutomaticReroutingService getReroutingService() {
         return reroutingService;
+    }
+
+    public EmergencyManagementService getEmergencyService() {
+        return emergencyService;
     }
 
     public RoadGraph getRoadGraph() {
