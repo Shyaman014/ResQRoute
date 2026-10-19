@@ -9,9 +9,12 @@ import com.resqroute.ui.component.StatusBadge;
 import com.resqroute.ui.component.UiDialogs;
 import com.resqroute.ui.controller.SimulationPresentationModel;
 import com.resqroute.ui.map.MapCoordinateTransform;
+import com.resqroute.ui.map.MapProvider;
+import com.resqroute.ui.map.OsmTileService;
 import com.resqroute.ui.map.RoadNetworkCanvas;
 import com.resqroute.ui.model.UiMessage;
 import com.resqroute.ui.model.UiSimulationState;
+import javafx.application.Platform;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.control.*;
@@ -21,6 +24,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * Interactive map view providing full visualization of the city's road network,
@@ -74,10 +78,16 @@ public class MapView extends BorderPane {
     // Active Incidents List
     private final ListView<String> incidentsListView;
 
+    // Cartography Controls
+    private final ComboBox<MapProvider> mapProviderCombo;
+    private final Label tileStatusLabel;
+    private final HBox fallbackBanner;
+
     // Active Selection State
     private Node currentlySelectedNode;
     private MapCoordinateTransform.EdgeMatch currentlySelectedEdge;
     private AmbulanceMovementTelemetry currentlySelectedAmbulance;
+    private Hospital currentlySelectedHospital;
 
     public MapView(SimulationPresentationModel model) {
         this.model = Objects.requireNonNull(model, "SimulationPresentationModel must not be null");
@@ -97,6 +107,21 @@ public class MapView extends BorderPane {
 
         timeReadoutLabel = new Label("⏱ 00:00:00 / 00:30:00");
         timeReadoutLabel.getStyleClass().add("time-readout-badge");
+
+        // Map Cartography Provider Selector
+        mapProviderCombo = new ComboBox<>();
+        mapProviderCombo.getItems().addAll(MapProvider.values());
+        mapProviderCombo.setValue(MapProvider.CARTO_DARK);
+        mapProviderCombo.getStyleClass().add("toolbar-combo");
+        mapProviderCombo.setAccessibleText("Select Map Cartography Provider");
+        mapProviderCombo.setTooltip(new Tooltip("Select OpenStreetMap Cartography Provider"));
+        // NOTE: mapProviderCombo.setOnAction() is wired after canvas is initialized (below)
+
+        // Tile Connectivity Status Pill
+        tileStatusLabel = new Label("🟢 OSM Live");
+        tileStatusLabel.getStyleClass().addAll("sim-status-pill", "sim-status-idle");
+        tileStatusLabel.setTooltip(new Tooltip("OpenStreetMap Tile Provider Connectivity (Click to retry)"));
+        // NOTE: tileStatusLabel.setOnMouseClicked() is wired after canvas is initialized (below)
 
         playPauseBtn = new Button("▶ Play");
         playPauseBtn.getStyleClass().addAll("action-btn", "btn-success");
@@ -141,12 +166,25 @@ public class MapView extends BorderPane {
             }
         });
 
-        HBox toolbar = createLiveSimulationToolbar();
-        topContainer.getChildren().addAll(header, toolbar);
-        setTop(topContainer);
-
-        // 2. Center: Canvas inside resizable Pane with Legend Overlay
+        // 2. Center: Canvas inside resizable Pane with Legend Overlay & Fallback Banner
         canvas = new RoadNetworkCanvas();
+        canvas.setMapProvider(MapProvider.CARTO_DARK);
+        canvas.getTileService().setOnStatusChangedListener(status -> updateMapStatusDisplay());
+
+        // Wire canvas-dependent action handlers now that canvas is initialized
+        mapProviderCombo.setOnAction(e -> {
+            MapProvider selected = mapProviderCombo.getValue();
+            if (selected != null) {
+                canvas.setMapProvider(selected);
+                updateMapStatusDisplay();
+            }
+        });
+        tileStatusLabel.setOnMouseClicked(e -> {
+            if (canvas.getTileService().getStatus() == OsmTileService.Status.OFFLINE_FALLBACK) {
+                canvas.getTileService().retryConnection();
+            }
+        });
+
         canvasWrapper = new Pane(canvas);
         canvasWrapper.getStyleClass().add("map-canvas-container");
 
@@ -159,8 +197,29 @@ public class MapView extends BorderPane {
         StackPane.setAlignment(legendBox, Pos.TOP_LEFT);
         StackPane.setMargin(legendBox, new Insets(12));
 
-        StackPane mapStack = new StackPane(canvasWrapper, legendBox);
+        // Offline Fallback Alert Banner (Centered top)
+        fallbackBanner = new HBox(10);
+        fallbackBanner.setAlignment(Pos.CENTER);
+        fallbackBanner.setPadding(new Insets(8, 14, 8, 14));
+        fallbackBanner.setStyle("-fx-background-color: rgba(185, 28, 28, 0.92); -fx-background-radius: 6; -fx-border-color: #ef4444; -fx-border-radius: 6; -fx-border-width: 1.5;");
+        fallbackBanner.setMaxWidth(520);
+        Label fallbackMsg = new Label("⚠️ Map Tiles Offline: Local Vector Grid Fallback Active");
+        fallbackMsg.setStyle("-fx-text-fill: white; -fx-font-weight: bold; -fx-font-size: 11.5px;");
+        Button retryBtn = new Button("🔄 Retry Connection");
+        retryBtn.getStyleClass().addAll("action-btn", "mini-action-btn", "btn-secondary");
+        retryBtn.setOnAction(e -> canvas.getTileService().retryConnection());
+        fallbackBanner.getChildren().addAll(fallbackMsg, retryBtn);
+        fallbackBanner.setVisible(false);
+        fallbackBanner.setManaged(false);
+        StackPane.setAlignment(fallbackBanner, Pos.TOP_CENTER);
+        StackPane.setMargin(fallbackBanner, new Insets(12));
+
+        StackPane mapStack = new StackPane(canvasWrapper, legendBox, fallbackBanner);
         HBox.setHgrow(mapStack, Priority.ALWAYS);
+
+        HBox toolbar = createLiveSimulationToolbar();
+        topContainer.getChildren().addAll(header, toolbar);
+        setTop(topContainer);
 
         // 3. Right Sidebar: Tabs for Route Planning, Fleet, Inspector, and Incidents
         TabPane inspectorTabs = new TabPane();
@@ -350,10 +409,12 @@ public class MapView extends BorderPane {
         canvas.setOnNodeSelected(this::onNodeClicked);
         canvas.setOnEdgeSelected(this::onEdgeClicked);
         canvas.setOnAmbulanceSelected(this::onAmbulanceClicked);
+        canvas.setOnHospitalSelected(this::onHospitalClicked);
 
         // Wire model updates
         model.addStateChangeListener(m -> refresh());
         refresh();
+        updateMapStatusDisplay();
     }
 
     private HBox createLiveSimulationToolbar() {
@@ -403,6 +464,12 @@ public class MapView extends BorderPane {
         });
 
         bar.getChildren().addAll(zoomInBtn, zoomOutBtn, fitBtn, resetViewBtn);
+
+        Separator sepMap = new Separator();
+        sepMap.setOrientation(javafx.geometry.Orientation.VERTICAL);
+        Label mapLabel = new Label("🗺️ Layer:");
+        mapLabel.getStyleClass().add("toolbar-label");
+        bar.getChildren().addAll(sepMap, mapLabel, mapProviderCombo, tileStatusLabel);
 
         HBox spacer = new HBox();
         HBox.setHgrow(spacer, Priority.ALWAYS);
@@ -461,7 +528,8 @@ public class MapView extends BorderPane {
                 createLegendItem("🚑", "#06b6d4", "Returning to Base"),
                 createLegendItem("- -", "#ef4444", "Road Closed (⛔)"),
                 createLegendItem("══", "#38bdf8", "Active Transit Path"),
-                createLegendItem("══", "#22d3ee", "Planned Route"),
+                createLegendItem("══", "#10b981", "Optimal Route (A*)"),
+                createLegendItem("═ ═", "#a855f7", "Alternative Route (Yen)"),
                 createLegendItem("🏥", "#10b981", "Hospital Facility"),
                 createLegendItem("🚨", "#ef4444", "Active Emergency"));
         return legend;
@@ -481,15 +549,76 @@ public class MapView extends BorderPane {
         return row;
     }
 
+    private void onHospitalClicked(Hospital hosp) {
+        this.currentlySelectedHospital = hosp;
+        this.currentlySelectedNode = null;
+        this.currentlySelectedEdge = null;
+        this.currentlySelectedAmbulance = null;
+
+        if (hosp != null) {
+            inspectorTitleLabel.setText("🏥 " + hosp.getName());
+            setAsSourceBtn.setDisable(true);
+            setAsDestBtn.setDisable(false);
+            setAsDestBtn.setText("Set as Destination (B)");
+            setAsDestBtn.setOnAction(e -> {
+                destCombo.setValue(hosp.getLocationNodeId());
+                updateWaypointsOnCanvas();
+            });
+            toggleRoadClosureBtn.setDisable(true);
+            sendToBaseBtn.setDisable(true);
+
+            StringBuilder sb = new StringBuilder();
+            sb.append("Facility ID: ").append(hosp.getId()).append("\n");
+            sb.append("Location Node: ").append(hosp.getLocationNodeId()).append("\n");
+            double util = hosp.getTotalCapacity() > 0
+                    ? ((double) hosp.getOccupiedCapacity() / hosp.getTotalCapacity() * 100.0)
+                    : 0.0;
+            sb.append(String.format("Bed Capacity: %d / %d occupied (%d available)\n",
+                    hosp.getOccupiedCapacity(), hosp.getTotalCapacity(), hosp.getAvailableCapacity()));
+            sb.append(String.format("Capacity Utilization: %.1f%%\n\n", util));
+
+            sb.append("Supported Emergency Types:\n");
+            for (EmergencyType type : hosp.getSupportedEmergencyTypes()) {
+                sb.append(" • ").append(type.displayName()).append("\n");
+            }
+
+            if (hosp.getCapabilities() != null && !hosp.getCapabilities().isEmpty()) {
+                sb.append("\nSpecialized Clinical Capabilities:\n");
+                for (HospitalCapability cap : hosp.getCapabilities()) {
+                    sb.append(" • ").append(cap.name().replace('_', ' ')).append("\n");
+                }
+            }
+
+            inspectorDetailsLabel.setText(sb.toString());
+        } else {
+            resetInspector();
+        }
+    }
+
     private void onNodeClicked(Node node) {
         this.currentlySelectedNode = node;
+        this.currentlySelectedHospital = null;
         this.currentlySelectedEdge = null;
         this.currentlySelectedAmbulance = null;
 
         if (node != null) {
             inspectorTitleLabel.setText("📍 Intersection: " + node.getId());
             setAsSourceBtn.setDisable(false);
+            setAsSourceBtn.setText("Set as Origin (A)");
+            setAsSourceBtn.setOnAction(e -> {
+                if (currentlySelectedNode != null) {
+                    sourceCombo.setValue(currentlySelectedNode.getId());
+                    updateWaypointsOnCanvas();
+                }
+            });
             setAsDestBtn.setDisable(false);
+            setAsDestBtn.setText("Set as Destination (B)");
+            setAsDestBtn.setOnAction(e -> {
+                if (currentlySelectedNode != null) {
+                    destCombo.setValue(currentlySelectedNode.getId());
+                    updateWaypointsOnCanvas();
+                }
+            });
             toggleRoadClosureBtn.setDisable(true);
             sendToBaseBtn.setDisable(true);
 
@@ -519,6 +648,43 @@ public class MapView extends BorderPane {
             inspectorDetailsLabel.setText(sb.toString());
         } else {
             resetInspector();
+        }
+    }
+
+    private void updateMapStatusDisplay() {
+        if (canvas == null) return;
+        if (canvas.getMapProvider() == MapProvider.OFFLINE_VECTOR) {
+            tileStatusLabel.setText("📐 Vector Mode");
+            tileStatusLabel.setStyle("-fx-text-fill: #94a3b8;");
+            fallbackBanner.setVisible(false);
+            fallbackBanner.setManaged(false);
+            return;
+        }
+
+        OsmTileService.Status status = canvas.getTileService().getStatus();
+        switch (status) {
+            case ONLINE -> {
+                tileStatusLabel.setText("🟢 OSM Live");
+                tileStatusLabel.setStyle("-fx-text-fill: #10b981; -fx-cursor: default;");
+                fallbackBanner.setVisible(false);
+                fallbackBanner.setManaged(false);
+            }
+            case LOADING -> {
+                tileStatusLabel.setText("🔄 Loading...");
+                tileStatusLabel.setStyle("-fx-text-fill: #38bdf8; -fx-cursor: default;");
+            }
+            case OFFLINE_FALLBACK -> {
+                tileStatusLabel.setText("⚠️ Tiles Offline");
+                tileStatusLabel.setStyle("-fx-text-fill: #ef4444; -fx-cursor: hand;");
+                fallbackBanner.setVisible(true);
+                fallbackBanner.setManaged(true);
+            }
+            case DISABLED -> {
+                tileStatusLabel.setText("📐 Vector Mode");
+                tileStatusLabel.setStyle("-fx-text-fill: #94a3b8;");
+                fallbackBanner.setVisible(false);
+                fallbackBanner.setManaged(false);
+            }
         }
     }
 
@@ -659,40 +825,48 @@ public class MapView extends BorderPane {
             return;
         }
 
-        try {
+        calculateRouteBtn.setDisable(true);
+        calculateRouteBtn.setText("⏳ Calculating...");
+
+        CompletableFuture.supplyAsync(() -> {
             if (algo != null && algo.startsWith("Yen")) {
-                List<RouteResult> alternatives = model.calculateAlternativeRoutes(src, dst, 3);
-                if (alternatives.isEmpty() || !alternatives.get(0).isReachable()) {
-                    displayUnreachableRoute(src, dst);
-                    return;
-                }
-
-                RouteResult primary = alternatives.get(0);
-                canvas.setPrimaryRoute(primary);
-                canvas.setAlternativeRoutes(alternatives.subList(1, alternatives.size()));
-
-                displayRouteDetails(primary);
-                displayAlternativesSummary(alternatives);
+                return model.calculateAlternativeRoutes(src, dst, 3);
             } else {
                 String algoCode = (algo != null && algo.startsWith("A*")) ? "A_STAR" : "DIJKSTRA";
-                RouteResult route = model.calculateRoute(src, dst, algoCode);
+                RouteResult r = model.calculateRoute(src, dst, algoCode);
+                return List.of(r);
+            }
+        }).thenAcceptAsync(routes -> {
+            calculateRouteBtn.setDisable(false);
+            calculateRouteBtn.setText("🧭 Calculate Route");
 
-                if (!route.isReachable()) {
-                    displayUnreachableRoute(src, dst);
-                    return;
-                }
+            if (routes.isEmpty() || !routes.get(0).isReachable()) {
+                displayUnreachableRoute(src, dst);
+                return;
+            }
 
-                canvas.setPrimaryRoute(route);
+            RouteResult primary = routes.get(0);
+            canvas.setPrimaryRoute(primary);
+
+            if (routes.size() > 1) {
+                canvas.setAlternativeRoutes(routes.subList(1, routes.size()));
+                displayAlternativesSummary(routes);
+            } else {
                 canvas.setAlternativeRoutes(List.of());
                 alternativeRoutesBox.getChildren().clear();
-
-                displayRouteDetails(route);
             }
+
+            displayRouteDetails(primary);
             model.publishMessage(UiMessage.success("Optimal route computed successfully: " + src + " -> " + dst));
-        } catch (Exception ex) {
-            displayUnreachableRoute(src, dst);
-            model.publishMessage(UiMessage.error("Route calculation error: " + ex.getMessage()));
-        }
+        }, Platform::runLater).exceptionally(ex -> {
+            Platform.runLater(() -> {
+                calculateRouteBtn.setDisable(false);
+                calculateRouteBtn.setText("🧭 Calculate Route");
+                displayUnreachableRoute(src, dst);
+                model.publishMessage(UiMessage.error("Route calculation error: " + ex.getMessage()));
+            });
+            return null;
+        });
     }
 
     private void displayRouteDetails(RouteResult route) {
@@ -897,4 +1071,17 @@ public class MapView extends BorderPane {
     public RoadNetworkCanvas getCanvas() {
         return canvas;
     }
+
+    public ComboBox<MapProvider> getMapProviderCombo() {
+        return mapProviderCombo;
+    }
+
+    public Label getTileStatusLabel() {
+        return tileStatusLabel;
+    }
+
+    public HBox getFallbackBanner() {
+        return fallbackBanner;
+    }
 }
+

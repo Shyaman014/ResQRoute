@@ -262,4 +262,111 @@ public class MapCoordinateTransform {
     public double getPanY() {
         return panY;
     }
+
+    public double getCanvasWidth() {
+        return canvasWidth;
+    }
+
+    public double getCanvasHeight() {
+        return canvasHeight;
+    }
+
+    // ==========================================
+    // Web Mercator Slippy Map Tile Calculations
+    // ==========================================
+
+    public record ScreenRect(double x, double y, double width, double height) {}
+
+    public record TileBounds(int minX, int maxX, int minY, int maxY, int zoom) {}
+
+    /**
+     * Calculates the optimal Web Mercator tile zoom level [1..18] for the current viewport scale.
+     */
+    public int calculateOptimalTileZoom() {
+        GeoCoordinate left = toGeo(0, canvasHeight / 2.0);
+        GeoCoordinate right = toGeo(canvasWidth, canvasHeight / 2.0);
+        double lonSpan = Math.abs(right.longitude() - left.longitude());
+        if (lonSpan <= 1e-6) {
+            lonSpan = 0.005;
+        }
+
+        double pixelsPerDegree = Math.max(1.0, canvasWidth / lonSpan);
+        double zoomDouble = Math.log((pixelsPerDegree * 360.0) / 256.0) / Math.log(2.0);
+        int z = (int) Math.round(zoomDouble);
+        return Math.clamp(z, 2, 18);
+    }
+
+    /**
+     * Calculates the bounding range of visible Slippy Map tiles intersecting the viewport.
+     */
+    public TileBounds getVisibleTileBounds(int zoom) {
+        int clampedZoom = Math.clamp(zoom, 1, 19);
+        int maxTiles = 1 << clampedZoom;
+
+        // Sample corners and midpoints for safety against skewed aspect ratios
+        GeoCoordinate nw = toGeo(0, 0);
+        GeoCoordinate se = toGeo(canvasWidth, canvasHeight);
+        GeoCoordinate ne = toGeo(canvasWidth, 0);
+        GeoCoordinate sw = toGeo(0, canvasHeight);
+
+        double minLonVal = Math.min(Math.min(nw.longitude(), se.longitude()), Math.min(ne.longitude(), sw.longitude()));
+        double maxLonVal = Math.max(Math.max(nw.longitude(), se.longitude()), Math.max(ne.longitude(), sw.longitude()));
+        double minLatVal = Math.min(Math.min(nw.latitude(), se.latitude()), Math.min(ne.latitude(), sw.latitude()));
+        double maxLatVal = Math.max(Math.max(nw.latitude(), se.latitude()), Math.max(ne.latitude(), sw.latitude()));
+
+        int minX = Math.clamp(lonToTileX(minLonVal, clampedZoom), 0, maxTiles - 1);
+        int maxX = Math.clamp(lonToTileX(maxLonVal, clampedZoom), 0, maxTiles - 1);
+        int minY = Math.clamp(latToTileY(maxLatVal, clampedZoom), 0, maxTiles - 1);
+        int maxY = Math.clamp(latToTileY(minLatVal, clampedZoom), 0, maxTiles - 1);
+
+        return new TileBounds(minX, maxX, minY, maxY, clampedZoom);
+    }
+
+    /**
+     * Calculates the screen rectangle where a specific OpenStreetMap tile should be rendered.
+     */
+    public ScreenRect getTileScreenRect(int tileX, int tileY, int zoom) {
+        double latNW = tileYToLat(tileY, zoom);
+        double lonNW = tileXToLon(tileX, zoom);
+        double latSE = tileYToLat(tileY + 1, zoom);
+        double lonSE = tileXToLon(tileX + 1, zoom);
+
+        ScreenPoint ptNW = toScreen(latNW, lonNW);
+        ScreenPoint ptSE = toScreen(latSE, lonSE);
+
+        double x = ptNW.x();
+        double y = ptNW.y();
+        double width = Math.max(1.0, ptSE.x() - ptNW.x());
+        double height = Math.max(1.0, ptSE.y() - ptNW.y());
+
+        return new ScreenRect(x, y, width, height);
+    }
+
+    public static int lonToTileX(double lon, int zoom) {
+        int maxTiles = 1 << Math.clamp(zoom, 0, 30);
+        double clampedLon = Math.clamp(lon, -180.0, 180.0);
+        int x = (int) Math.floor((clampedLon + 180.0) / 360.0 * maxTiles);
+        return Math.clamp(x, 0, maxTiles - 1);
+    }
+
+    public static int latToTileY(double lat, int zoom) {
+        int maxTiles = 1 << Math.clamp(zoom, 0, 30);
+        double clampedLat = Math.clamp(lat, -85.0511, 85.0511);
+        double rad = Math.toRadians(clampedLat);
+        double n = (1.0 - Math.log(Math.tan(rad) + 1.0 / Math.cos(rad)) / Math.PI) / 2.0;
+        int y = (int) Math.floor(n * maxTiles);
+        return Math.clamp(y, 0, maxTiles - 1);
+    }
+
+    public static double tileXToLon(int tileX, int zoom) {
+        int maxTiles = 1 << Math.clamp(zoom, 0, 30);
+        return ((double) tileX / maxTiles) * 360.0 - 180.0;
+    }
+
+    public static double tileYToLat(int tileY, int zoom) {
+        int maxTiles = 1 << Math.clamp(zoom, 0, 30);
+        double n = Math.PI * (1.0 - 2.0 * ((double) tileY / maxTiles));
+        return Math.toDegrees(Math.atan(Math.sinh(n)));
+    }
 }
+

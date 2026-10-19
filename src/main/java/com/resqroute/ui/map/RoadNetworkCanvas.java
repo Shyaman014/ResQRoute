@@ -7,6 +7,7 @@ import com.resqroute.simulation.model.VehicleVisualState;
 import javafx.geometry.VPos;
 import javafx.scene.canvas.Canvas;
 import javafx.scene.canvas.GraphicsContext;
+import javafx.scene.image.Image;
 import javafx.scene.input.MouseButton;
 import javafx.scene.paint.Color;
 import javafx.scene.text.Font;
@@ -23,6 +24,8 @@ import java.util.function.Consumer;
 public class RoadNetworkCanvas extends Canvas {
 
     private final MapCoordinateTransform transform = new MapCoordinateTransform();
+    private OsmTileService tileService = new OsmTileService();
+    private MapProvider mapProvider = MapProvider.CARTO_DARK;
 
     // Data sources
     private RoadGraph graph;
@@ -40,6 +43,7 @@ public class RoadNetworkCanvas extends Canvas {
     private Node selectedNode;
     private MapCoordinateTransform.EdgeMatch selectedEdge;
     private String selectedAmbulanceId;
+    private Hospital selectedHospital;
     private String routeSourceNodeId;
     private String routeDestinationNodeId;
 
@@ -47,6 +51,7 @@ public class RoadNetworkCanvas extends Canvas {
     private Consumer<Node> onNodeSelected;
     private Consumer<MapCoordinateTransform.EdgeMatch> onEdgeSelected;
     private Consumer<AmbulanceMovementTelemetry> onAmbulanceSelected;
+    private Consumer<Hospital> onHospitalSelected;
 
     // Drag interaction tracking
     private double lastDragX;
@@ -54,6 +59,9 @@ public class RoadNetworkCanvas extends Canvas {
     private boolean isDragging = false;
 
     public RoadNetworkCanvas() {
+        // Wire tile service reload listener
+        tileService.setOnTileLoadedListener(this::redraw);
+
         // Redraw on canvas resize
         widthProperty().addListener((obs, oldW, newW) -> {
             transform.updateCanvasSize(newW.doubleValue(), getHeight());
@@ -121,14 +129,42 @@ public class RoadNetworkCanvas extends Canvas {
                 }
             }
 
-            // 2. Check for node click (hit radius = 22px)
+            // 2. Check for hospital facility click (hit radius = 24px)
+            if (hospitals != null && !hospitals.isEmpty()) {
+                for (Hospital hosp : hospitals) {
+                    Optional<Node> locNode = graph.getNode(hosp.getLocationNodeId());
+                    if (locNode.isPresent()) {
+                        MapCoordinateTransform.ScreenPoint pt = transform.toScreen(locNode.get().getCoordinates());
+                        double dist = Math.hypot(e.getX() - pt.x(), e.getY() - (pt.y() - 18.0));
+                        if (dist <= 24.0) {
+                            setSelectedHospital(hosp);
+                            setSelectedNode(null);
+                            setSelectedEdge(null);
+                            setSelectedAmbulanceId(null);
+                            if (onHospitalSelected != null) {
+                                onHospitalSelected.accept(hosp);
+                            }
+                            if (onNodeSelected != null) onNodeSelected.accept(null);
+                            if (onEdgeSelected != null) onEdgeSelected.accept(null);
+                            if (onAmbulanceSelected != null) onAmbulanceSelected.accept(null);
+                            return;
+                        }
+                    }
+                }
+            }
+
+            // 3. Check for node click (hit radius = 22px)
             Optional<Node> hitNode = transform.findNearestNode(graph.getAllNodes(), e.getX(), e.getY(), 22.0);
             if (hitNode.isPresent()) {
                 setSelectedNode(hitNode.get());
+                setSelectedHospital(null);
                 setSelectedEdge(null);
                 setSelectedAmbulanceId(null);
                 if (onNodeSelected != null) {
                     onNodeSelected.accept(hitNode.get());
+                }
+                if (onHospitalSelected != null) {
+                    onHospitalSelected.accept(null);
                 }
                 if (onAmbulanceSelected != null) {
                     onAmbulanceSelected.accept(null);
@@ -136,14 +172,18 @@ public class RoadNetworkCanvas extends Canvas {
                 return;
             }
 
-            // 3. Check for edge click (hit distance = 14px)
+            // 4. Check for edge click (hit distance = 14px)
             Optional<MapCoordinateTransform.EdgeMatch> hitEdge = transform.findNearestEdge(graph, e.getX(), e.getY(), 14.0);
             if (hitEdge.isPresent()) {
                 setSelectedEdge(hitEdge.get());
+                setSelectedHospital(null);
                 setSelectedNode(null);
                 setSelectedAmbulanceId(null);
                 if (onEdgeSelected != null) {
                     onEdgeSelected.accept(hitEdge.get());
+                }
+                if (onHospitalSelected != null) {
+                    onHospitalSelected.accept(null);
                 }
                 if (onAmbulanceSelected != null) {
                     onAmbulanceSelected.accept(null);
@@ -151,9 +191,11 @@ public class RoadNetworkCanvas extends Canvas {
             } else {
                 // Deselect
                 setSelectedNode(null);
+                setSelectedHospital(null);
                 setSelectedEdge(null);
                 setSelectedAmbulanceId(null);
                 if (onNodeSelected != null) onNodeSelected.accept(null);
+                if (onHospitalSelected != null) onHospitalSelected.accept(null);
                 if (onEdgeSelected != null) onEdgeSelected.accept(null);
                 if (onAmbulanceSelected != null) onAmbulanceSelected.accept(null);
             }
@@ -245,12 +287,16 @@ public class RoadNetworkCanvas extends Canvas {
 
         GraphicsContext gc = getGraphicsContext2D();
 
-        // 1. Dark Blueprint Background
-        gc.setFill(Color.web("#090d16"));
-        gc.fillRect(0, 0, w, h);
-
-        // Grid lines for spatial sense
-        drawBackgroundGrid(gc, w, h);
+        // 1. Draw Map Base Layer (OpenStreetMap tiles or Blueprint Grid)
+        if (mapProvider != null && mapProvider.isOnline() && tileService != null) {
+            int zoom = transform.calculateOptimalTileZoom();
+            MapCoordinateTransform.TileBounds bounds = transform.getVisibleTileBounds(zoom);
+            drawOsmTiles(gc, bounds, zoom, w, h);
+        } else {
+            gc.setFill(Color.web("#090d16"));
+            gc.fillRect(0, 0, w, h);
+            drawBackgroundGrid(gc, w, h);
+        }
 
         if (graph == null || graph.isEmpty()) {
             drawEmptyState(gc, w, h);
@@ -276,6 +322,11 @@ public class RoadNetworkCanvas extends Canvas {
         drawHospitals(gc);
         drawActiveEmergencies(gc);
         drawAmbulanceFleet(gc);
+
+        // 8. Attribution watermark (on top of canvas)
+        if (mapProvider != null && mapProvider.isOnline()) {
+            drawAttribution(gc, w, h);
+        }
     }
 
     private void drawBackgroundGrid(GraphicsContext gc, double w, double h) {
@@ -310,6 +361,13 @@ public class RoadNetworkCanvas extends Canvas {
                 boolean isSelected = (selectedEdge != null
                         && selectedEdge.sourceNodeId().equals(source.getId())
                         && selectedEdge.edge().getDestination().getId().equals(dest.getId()));
+
+                // High-contrast dark casing when rendered over OpenStreetMap tiles
+                if (mapProvider != null && mapProvider.isOnline()) {
+                    gc.setStroke(Color.web("#030712", 0.75));
+                    gc.setLineWidth(isSelected ? 7.0 : 4.5);
+                    gc.strokeLine(ptA.x(), ptA.y(), ptB.x(), ptB.y());
+                }
 
                 if (isClosed) {
                     // Closed Road: Dashed Red Line
@@ -472,23 +530,46 @@ public class RoadNetworkCanvas extends Canvas {
             graph.getNode(hosp.getLocationNodeId()).ifPresent(node -> {
                 MapCoordinateTransform.ScreenPoint pt = transform.toScreen(node.getCoordinates());
 
+                boolean isSelected = (selectedHospital != null && selectedHospital.getId().equals(hosp.getId()));
+
+                if (isSelected) {
+                    gc.setStroke(Color.web("#fbbf24"));
+                    gc.setLineWidth(2.5);
+                    gc.strokeOval(pt.x() - 18, pt.y() - 18, 36, 36);
+                }
+
                 // Hospital badge container
-                double badgeX = pt.x() - 12;
-                double badgeY = pt.y() - 28;
+                double badgeW = 48.0;
+                double badgeH = 22.0;
+                double badgeX = pt.x() - badgeW / 2.0;
+                double badgeY = pt.y() - 32.0;
 
                 Color statusColor = hosp.isOpen() ? Color.web("#10b981") : (hosp.isBusy() ? Color.web("#f59e0b") : Color.web("#ef4444"));
 
-                gc.setFill(Color.web("#0f172a"));
-                gc.fillRoundRect(badgeX - 4, badgeY - 4, 32, 22, 6, 6);
+                gc.setFill(Color.web("#0f172a", 0.95));
+                gc.fillRoundRect(badgeX, badgeY, badgeW, badgeH, 6, 6);
 
-                gc.setStroke(statusColor);
-                gc.setLineWidth(1.5);
-                gc.strokeRoundRect(badgeX - 4, badgeY - 4, 32, 22, 6, 6);
+                gc.setStroke(isSelected ? Color.web("#fbbf24") : statusColor);
+                gc.setLineWidth(isSelected ? 2.5 : 1.5);
+                gc.strokeRoundRect(badgeX, badgeY, badgeW, badgeH, 6, 6);
 
-                gc.setFont(Font.font("Segoe UI", FontWeight.BOLD, 12));
+                gc.setFont(Font.font("Segoe UI", FontWeight.BOLD, 11));
+                gc.setFill(Color.WHITE);
                 gc.setTextAlign(TextAlignment.LEFT);
+                gc.setTextBaseline(VPos.CENTER);
+                gc.fillText("🏥", badgeX + 4.0, badgeY + badgeH / 2.0);
+
+                gc.setFont(Font.font("Segoe UI", FontWeight.BOLD, 9.0));
+                gc.setFill(statusColor);
+                gc.setTextAlign(TextAlignment.LEFT);
+                gc.fillText(hosp.getAvailableCapacity() + "b", badgeX + 22.0, badgeY + badgeH / 2.0);
+
+                // Hospital name label below intersection
+                gc.setFont(Font.font("Segoe UI", FontWeight.BOLD, 9.5));
+                gc.setFill(Color.web("#38bdf8"));
+                gc.setTextAlign(TextAlignment.CENTER);
                 gc.setTextBaseline(VPos.TOP);
-                gc.fillText("🏥", badgeX, badgeY);
+                gc.fillText(hosp.getName(), pt.x(), pt.y() + 22.0);
             });
         }
     }
@@ -699,4 +780,93 @@ public class RoadNetworkCanvas extends Canvas {
             });
         }
     }
+
+    // ==========================================
+    // OpenStreetMap Tile Layer Rendering
+    // ==========================================
+
+    private void drawOsmTiles(GraphicsContext gc, MapCoordinateTransform.TileBounds bounds, int zoom, double w, double h) {
+        // Base tone background
+        gc.setFill(mapProvider == MapProvider.CARTO_LIGHT ? Color.web("#f1f5f9") : Color.web("#090d16"));
+        gc.fillRect(0, 0, w, h);
+
+        boolean anyTileMissing = false;
+        for (int tx = bounds.minX(); tx <= bounds.maxX(); tx++) {
+            for (int ty = bounds.minY(); ty <= bounds.maxY(); ty++) {
+                MapCoordinateTransform.ScreenRect rect = transform.getTileScreenRect(tx, ty, zoom);
+                Optional<Image> tile = tileService.getTile(tx, ty, zoom, mapProvider);
+                if (tile.isPresent() && !tile.get().isError()) {
+                    gc.drawImage(tile.get(), rect.x(), rect.y(), rect.width(), rect.height());
+                } else {
+                    anyTileMissing = true;
+                    // Draw subtle grid tile placeholder while loading
+                    gc.setStroke(mapProvider == MapProvider.CARTO_LIGHT ? Color.web("#cbd5e1", 0.5) : Color.web("#1e293b", 0.5));
+                    gc.setLineWidth(1.0);
+                    gc.strokeRect(rect.x(), rect.y(), rect.width(), rect.height());
+                }
+            }
+        }
+
+        // Overlay spatial grid if in fallback mode
+        if (tileService.getStatus() == OsmTileService.Status.OFFLINE_FALLBACK) {
+            drawBackgroundGrid(gc, w, h);
+        }
+    }
+
+    private void drawAttribution(GraphicsContext gc, double w, double h) {
+        String attr = mapProvider.getAttribution();
+        if (attr == null || attr.isEmpty()) return;
+
+        gc.setFont(Font.font("Segoe UI", FontWeight.NORMAL, 9.5));
+        double textW = attr.length() * 5.5;
+        double badgeW = textW + 16.0;
+        double badgeH = 18.0;
+        double badgeX = w - badgeW - 8.0;
+        double badgeY = h - badgeH - 6.0;
+
+        gc.setFill(Color.web("#030712", 0.75));
+        gc.fillRoundRect(badgeX, badgeY, badgeW, badgeH, 4, 4);
+
+        gc.setFill(Color.web("#94a3b8"));
+        gc.setTextAlign(TextAlignment.LEFT);
+        gc.setTextBaseline(VPos.CENTER);
+        gc.fillText(attr, badgeX + 8.0, badgeY + badgeH / 2.0);
+    }
+
+    // ==========================================
+    // Configuration & Callbacks
+    // ==========================================
+
+    public OsmTileService getTileService() {
+        return tileService;
+    }
+
+    public void setTileService(OsmTileService tileService) {
+        this.tileService = Objects.requireNonNull(tileService, "tileService must not be null");
+        this.tileService.setOnTileLoadedListener(this::redraw);
+        redraw();
+    }
+
+    public MapProvider getMapProvider() {
+        return mapProvider;
+    }
+
+    public void setMapProvider(MapProvider mapProvider) {
+        this.mapProvider = (mapProvider == null) ? MapProvider.CARTO_DARK : mapProvider;
+        redraw();
+    }
+
+    public Hospital getSelectedHospital() {
+        return selectedHospital;
+    }
+
+    public void setSelectedHospital(Hospital hospital) {
+        this.selectedHospital = hospital;
+        redraw();
+    }
+
+    public void setOnHospitalSelected(Consumer<Hospital> onHospitalSelected) {
+        this.onHospitalSelected = onHospitalSelected;
+    }
 }
+
