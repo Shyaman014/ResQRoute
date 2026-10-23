@@ -937,6 +937,10 @@ public class CitySimulationEngine {
         return incidentService;
     }
 
+    public AmbulanceDispatchService getDispatchService() {
+        return dispatchService;
+    }
+
     public TrafficSimulationEngine getTrafficEngine() {
         return trafficEngine;
     }

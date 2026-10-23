@@ -4,12 +4,17 @@ import com.resqroute.algorithm.AStarRoutingAlgorithm;
 import com.resqroute.algorithm.DijkstraRoutingAlgorithm;
 import com.resqroute.algorithm.RoutingAlgorithm;
 import com.resqroute.algorithm.YenKShortestPathsAlgorithm;
+import com.resqroute.dispatch.DispatchDecisionRecord;
+import com.resqroute.dispatch.DispatchResult;
 import com.resqroute.graph.RoadGraph;
 import com.resqroute.model.Ambulance;
+import com.resqroute.model.AmbulanceStatus;
 import com.resqroute.model.EmergencyCase;
+import com.resqroute.model.EmergencyStatus;
 import com.resqroute.model.Hospital;
 import com.resqroute.model.RoadIncident;
 import com.resqroute.model.RouteResult;
+import com.resqroute.service.IntelligentDispatchService;
 import com.resqroute.service.RoadIncidentService;
 import com.resqroute.simulation.engine.CitySimulationEngine;
 import com.resqroute.simulation.event.SimulationEvent;
@@ -44,6 +49,9 @@ public class SimulationPresentationModel {
     private CitySimulationEngine engine;
     private UiSimulationState uiState = UiSimulationState.UNINITIALIZED;
     private UiMessage latestMessage = UiMessage.info("System ready. Initialize a city scenario to begin.");
+
+    // Intelligent dispatch facade (wired per scenario)
+    private IntelligentDispatchService intelligentDispatchService;
 
     // Execution configuration
     private Duration defaultStepDuration = Duration.ofMinutes(1);
@@ -116,6 +124,17 @@ public class SimulationPresentationModel {
         this.currentScenario = scenario;
         this.engine = new CitySimulationEngine(scenario);
         this.uiState = UiSimulationState.IDLE;
+
+        // Wire IntelligentDispatchService to the newly created engine services
+        if (this.intelligentDispatchService != null) {
+            this.intelligentDispatchService.shutdown();
+        }
+        this.intelligentDispatchService = new IntelligentDispatchService(
+                engine.getDispatchService(),
+                engine.getFleetService(),
+                engine.getQueueService(),
+                uiThreadDispatcher
+        );
 
         if (databaseService != null) {
             String scenarioId = "SCENARIO-" + scenario.getName().replaceAll("\\s+", "-").toUpperCase();
@@ -466,6 +485,127 @@ public class SimulationPresentationModel {
         if (engine != null) return Optional.ofNullable(engine.getLiveGraph());
         if (currentScenario != null) return Optional.ofNullable(currentScenario.getRoadGraph());
         return Optional.empty();
+    }
+
+    // ==========================================
+    // Intelligent Dispatch Integration
+    // ==========================================
+
+    /**
+     * Triggers an intelligent dispatch cycle for the highest-priority pending emergency.
+     * Routing is performed on a background thread; the UI is notified via the configured dispatcher.
+     *
+     * @param onComplete Callback receiving the dispatch result on the UI thread.
+     */
+    public void dispatchNowAsync(Consumer<DispatchResult> onComplete) {
+        if (intelligentDispatchService == null) {
+            publishMessage(UiMessage.warning("Initialize a scenario before dispatching."));
+            if (onComplete != null) {
+                onComplete.accept(null);
+            }
+            return;
+        }
+        intelligentDispatchService.dispatchNextAsync(result -> {
+            if (result != null) {
+                if (result.isSuccess()) {
+                    publishMessage(UiMessage.success(
+                            "✅ Dispatched: " + result.getMessage()));
+                } else {
+                    publishMessage(UiMessage.warning(
+                            "⚠ Dispatch: " + result.getMessage()));
+                }
+                notifyStateChanged();
+            }
+            if (onComplete != null) onComplete.accept(result);
+        });
+    }
+
+    /**
+     * Triggers a synchronous dispatch for the highest-priority pending emergency.
+     *
+     * @return The dispatch result.
+     */
+    public synchronized DispatchResult dispatchNow() {
+        if (intelligentDispatchService == null) {
+            publishMessage(UiMessage.warning("Initialize a scenario before dispatching."));
+            return null;
+        }
+        DispatchResult result = intelligentDispatchService.dispatchNext();
+        if (result.isSuccess()) {
+            publishMessage(UiMessage.success("✅ Dispatched: " + result.getMessage()));
+        } else {
+            publishMessage(UiMessage.warning("⚠ Dispatch: " + result.getMessage()));
+        }
+        notifyStateChanged();
+        return result;
+    }
+
+    /**
+     * Returns pending emergencies currently waiting in the dispatch priority queue.
+     */
+    public List<EmergencyCase> getPendingEmergencies() {
+        if (engine == null) return Collections.emptyList();
+        return engine.getQueueService().getPendingEmergencies();
+    }
+
+    /**
+     * Returns all ambulances currently available for dispatch.
+     */
+    public List<Ambulance> getAvailableAmbulances() {
+        if (engine == null) return Collections.emptyList();
+        return engine.getFleetService().getAvailableAmbulances();
+    }
+
+    /**
+     * Returns ambulances currently assigned to an emergency mission.
+     */
+    public List<Ambulance> getAssignedAmbulances() {
+        if (engine == null) return Collections.emptyList();
+        return engine.getFleetService().getAllAmbulances().stream()
+                .filter(a -> a.getStatus() == AmbulanceStatus.ASSIGNED ||
+                             a.getStatus() == AmbulanceStatus.EN_ROUTE ||
+                             a.getStatus() == AmbulanceStatus.ON_SCENE)
+                .toList();
+    }
+
+    /**
+     * Returns the human-readable rationale for the most recent dispatch decision.
+     */
+    public String getLastDispatchRationale() {
+        if (intelligentDispatchService == null) return "No dispatch decision made yet.";
+        return intelligentDispatchService.getLastDispatchRationale();
+    }
+
+    /**
+     * Returns the most recent dispatch decision audit record, or empty if none.
+     */
+    public Optional<DispatchDecisionRecord> getLastDecisionRecord() {
+        if (intelligentDispatchService == null) return Optional.empty();
+        return Optional.ofNullable(intelligentDispatchService.getLastDecisionRecord());
+    }
+
+    /**
+     * Returns the dispatch audit log (most recent first).
+     */
+    public List<DispatchDecisionRecord> getDispatchAuditLog() {
+        if (intelligentDispatchService == null) return Collections.emptyList();
+        return intelligentDispatchService.getAuditLog();
+    }
+
+    /**
+     * Notifies the intelligent dispatch service that traffic conditions have changed.
+     * ETA recalculation runs in background; {@code onUpdate} is called on the UI thread.
+     *
+     * @param onUpdate Callback receiving updated ETA map (case ID → best ETA minutes).
+     */
+    public void notifyTrafficChanged(Consumer<Map<String, Double>> onUpdate) {
+        if (intelligentDispatchService != null) {
+            intelligentDispatchService.notifyTrafficChanged(onUpdate);
+        }
+    }
+
+    public Optional<IntelligentDispatchService> getIntelligentDispatchService() {
+        return Optional.ofNullable(intelligentDispatchService);
     }
 
     public Optional<RoadIncidentService> getIncidentService() {

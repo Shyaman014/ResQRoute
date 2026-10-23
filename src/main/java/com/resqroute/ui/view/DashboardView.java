@@ -1,5 +1,6 @@
 package com.resqroute.ui.view;
 
+import com.resqroute.dispatch.DispatchResult;
 import com.resqroute.model.*;
 import com.resqroute.simulation.event.SimulationEvent;
 import com.resqroute.ui.component.EmptyStateView;
@@ -43,6 +44,12 @@ public class DashboardView extends ScrollPane {
     private final TableView<EmergencyCase> emergencyTable;
     private final TableView<Ambulance> ambulanceTable;
     private final TableView<SimulationEvent> eventTable;
+
+    // Dispatch panel
+    private final Button dispatchBtn;
+    private final Label dispatchRationaleLabel;
+    private final Label pendingCountLabel;
+    private final Label availableCountLabel;
 
     public DashboardView(SimulationPresentationModel model) {
         this.model = Objects.requireNonNull(model, "SimulationPresentationModel must not be null");
@@ -155,6 +162,53 @@ public class DashboardView extends ScrollPane {
         eventTable = createEventTable();
         eventBox.getChildren().add(eventTable);
         contentBox.getChildren().add(eventBox);
+
+        setContent(contentBox);
+
+        // 5. Intelligent Dispatch Panel
+        VBox dispatchBox = createCardSection(
+                "🧠 Intelligent Dispatch Engine",
+                "Evaluate pending emergencies and assign the best available ambulance using traffic-aware routing"
+        );
+
+        HBox dispatchControls = new HBox(12);
+        dispatchControls.setAlignment(Pos.CENTER_LEFT);
+        dispatchControls.setPadding(new Insets(8, 0, 0, 0));
+
+        pendingCountLabel = new Label("Pending: 0");
+        pendingCountLabel.getStyleClass().add("stat-card-subtext");
+        pendingCountLabel.setId("dashboard-dispatch-pending-count");
+
+        availableCountLabel = new Label("Available: 0");
+        availableCountLabel.getStyleClass().add("stat-card-subtext");
+        availableCountLabel.setId("dashboard-dispatch-available-count");
+
+        dispatchBtn = new Button("⚡ Dispatch Next");
+        dispatchBtn.setId("dashboard-dispatch-now-btn");
+        dispatchBtn.getStyleClass().addAll("action-btn", "btn-primary");
+        dispatchBtn.setTooltip(new Tooltip("Assign the best available ambulance to the highest-priority pending emergency"));
+        dispatchBtn.setAccessibleText("Dispatch next pending emergency");
+        dispatchBtn.setDisable(true);
+        dispatchBtn.setOnAction(e -> {
+            dispatchBtn.setDisable(true);
+            dispatchBtn.setText("⏳ Dispatching…");
+            model.dispatchNowAsync(result -> {
+                dispatchBtn.setDisable(false);
+                dispatchBtn.setText("⚡ Dispatch Next");
+                // refresh is triggered by notifyStateChanged inside dispatchNowAsync
+            });
+        });
+
+        dispatchControls.getChildren().addAll(dispatchBtn, pendingCountLabel, availableCountLabel);
+        dispatchBox.getChildren().add(dispatchControls);
+
+        dispatchRationaleLabel = new Label("No dispatch decision made yet.");
+        dispatchRationaleLabel.setId("dashboard-dispatch-rationale-label");
+        dispatchRationaleLabel.getStyleClass().add("stat-card-subtext");
+        dispatchRationaleLabel.setWrapText(true);
+        dispatchBox.getChildren().add(dispatchRationaleLabel);
+
+        contentBox.getChildren().add(dispatchBox);
 
         setContent(contentBox);
 
@@ -392,5 +446,17 @@ public class DashboardView extends ScrollPane {
         emergencyTable.getItems().setAll(activeCases);
         ambulanceTable.getItems().setAll(ambulances);
         eventTable.getItems().setAll(model.getRecentEvents(15));
+
+        // 7. Update Dispatch Panel
+        List<EmergencyCase> pending = model.getPendingEmergencies();
+        List<Ambulance> avail = model.getAvailableAmbulances();
+        pendingCountLabel.setText("Pending: " + pending.size());
+        availableCountLabel.setText("Available: " + avail.size());
+
+        boolean canDispatch = model.isInitialized() && !pending.isEmpty() && !avail.isEmpty();
+        if (!"⏳ Dispatching…".equals(dispatchBtn.getText())) {
+            dispatchBtn.setDisable(!canDispatch);
+        }
+        dispatchRationaleLabel.setText(model.getLastDispatchRationale());
     }
 }
